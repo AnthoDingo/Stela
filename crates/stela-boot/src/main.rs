@@ -24,6 +24,7 @@ use uefi::{
 };
 #[cfg(feature = "diagnostics")]
 mod audio_check;
+mod boot_exit;
 mod choice;
 mod console;
 mod cpu;
@@ -231,6 +232,15 @@ fn stop_firmware_watchdog() {
     }
 }
 
+/// Say once that the firmware's ACPI table `signature` has a wrong checksum
+/// and is used as it is (`acpi::table`).
+fn acpi_checksum_fault(signature: [u8; 4]) {
+    output::arguments(format_args!(
+        "FIRMWARE ACPI {} checksum wrong: table used as it is\n",
+        signature.escape_ascii()
+    ));
+}
+
 #[uefi::entry]
 fn main() -> Status {
     // Before any Rust state exists: the system engine runs from this copy.
@@ -243,6 +253,7 @@ fn main() -> Status {
         "STELA UEFI MOUNT version={}\n",
         env!("CARGO_PKG_VERSION")
     ));
+    stela_runtime::pc::acpi::on_checksum_fault(acpi_checksum_fault);
     if !serial::present() {
         output::arguments(format_args!(
             "SERIAL no UART at COM1: nothing is sent to it or read from it\n"
@@ -333,8 +344,7 @@ fn main() -> Status {
     unsafe {
         asm!("cli", options(nomem, nostack));
         handoff.active_tables = Some(paging::activate(tables).unwrap_or_else(|error| {
-            output::arguments(format_args!("native table activation refused: {error}"));
-            output::fatal("native table activation failed");
+            output::fatal(format_args!("native table activation failed: {error}"));
         }));
         asm!(
             "mov rsp, {top}",
@@ -355,8 +365,9 @@ extern "sysv64" fn run(handoff: &mut firmware::Handoff) -> ! {
         .as_ref()
         .unwrap_or_else(|| output::fatal("actual activated native table owner is missing"));
     root.check_current().unwrap_or_else(|error| {
-        output::arguments(format_args!("activated native root refused: {error}\n"));
-        output::fatal("activated native root is unavailable");
+        output::fatal(format_args!(
+            "activated native root is unavailable: {error}"
+        ));
     });
     if let Some(storage) = handoff.storage.take() {
         storage.run(

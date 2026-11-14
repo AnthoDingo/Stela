@@ -197,6 +197,7 @@ impl Fixture {
                 clock,
                 model_timer(),
                 "composed VMD behind root and bridge".into(),
+                crate::nvme::Quirks::NONE,
                 (|_| Ok(protocol.registers()), protocol::attach),
             )
         }
@@ -388,15 +389,30 @@ fn composed_failed_d0_and_posted_bme_readback_never_issue_queue_dma() {
     }
 }
 
+/// Completions reporting another submission queue or a moved head complete
+/// their commands: Linux's `nvme_handle_cqe` reads neither field.
+#[test]
+fn composed_completion_queue_identifier_and_head_are_not_read() {
+    for fault in [Fault::Sqid, Fault::Head] {
+        let mut f = Fixture::new();
+        let (mut attached, mut returned) = f.attached();
+        let disk = &mut attached.namespaces[0];
+        f.protocol.fault(fault);
+        disk.write(0, &[0x3c; 512]).unwrap();
+        let mut output = [0; 512];
+        disk.read(0, &mut output).unwrap();
+        assert_eq!(output, [0x3c; 512]);
+        f.protocol.fault(Fault::None);
+        disk.retire_owned().unwrap();
+        drop(attached);
+        drop(f.take_stopped_model(&mut returned));
+        assert_eq!(f.drops.load(Ordering::Relaxed), 1);
+    }
+}
+
 #[test]
 fn composed_bad_cq_and_cache_failures_fence_all_stale_siblings() {
-    for fault in [
-        Fault::Cid,
-        Fault::Sqid,
-        Fault::Head,
-        Fault::DeviceVisibility,
-        Fault::CpuVisibility,
-    ] {
+    for fault in [Fault::DeviceVisibility, Fault::CpuVisibility] {
         let mut f = Fixture::new();
         let (mut attached, mut returned) = f.attached();
         let disk = &mut attached.namespaces[0];
@@ -425,7 +441,7 @@ fn composed_bad_cq_and_cache_failures_fence_all_stale_siblings() {
 
 #[test]
 fn composed_timeouts_reset_the_controller_with_dma_contained_like_linux() {
-    for fault in [Fault::Phase, Fault::Delayed] {
+    for fault in [Fault::Phase, Fault::Cid, Fault::Delayed] {
         let mut f = Fixture::new();
         let (mut attached, mut returned) = f.attached();
         let disk = &mut attached.namespaces[0];
@@ -445,9 +461,10 @@ fn composed_timeouts_reset_the_controller_with_dma_contained_like_linux() {
         let drained = events.iter().position(|event| *event == "drain").unwrap();
         assert!(!events[..drained].contains(&"cpu"));
         f.protocol.fault(Fault::None);
-        if matches!(fault, Fault::Phase) {
-            // No completion was ever visible, so the reset's own commands
-            // failed and the controller was removed as dead.
+        if matches!(fault, Fault::Phase | Fault::Cid) {
+            // No completion was ever visible or named a command, so the
+            // reset's own commands failed and the controller was removed as
+            // dead.
             assert!(sibling.flush().is_err());
             assert!(disk.write(0, &[1; 512]).is_err());
         } else {
@@ -527,4 +544,32 @@ fn composed_final_host_publication_failure_cannot_reuse_retired_registers_or_hie
     drop(attached);
     f.assert_retained(&returned, 0);
     assert_eq!(f.protocol.snapshot().register_owner_drops, 0);
+}
+
+#[test]
+fn every_hierarchy_refusal_names_its_own_cause() {
+    let errors = [
+        Error::UnsupportedDevice,
+        Error::InvalidResource,
+        Error::Mapping,
+        Error::ReadFailed,
+        Error::Readback,
+        Error::Address,
+        Error::Capability,
+        Error::Exhausted,
+        Error::Suspended,
+        Error::Quarantined,
+        Error::ActiveChild,
+        Error::UnstoppedChild(1, 2, 3),
+    ];
+    let mut messages: Vec<_> = errors
+        .into_iter()
+        .map(|error| match block(error) {
+            BlockError::Protocol(message) | BlockError::Unsupported(message) => message,
+            other => panic!("{error:?} became {other:?}"),
+        })
+        .collect();
+    messages.sort_unstable();
+    messages.dedup();
+    assert_eq!(messages.len(), errors.len());
 }

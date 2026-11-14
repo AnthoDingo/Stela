@@ -862,7 +862,9 @@ fn select_firmware(boot0: u32, catalog: Arc<Catalog>) -> Result<PciFirmware, Ser
     // stays allocated for every image borrowed from it for the boot.
     let stored: &'static Catalog = unsafe { &*Arc::into_raw(catalog.clone()) };
     let mut bindings = Vec::new();
-    let mut available = false;
+    // nouveau needs every file of the chip's recipe: one missing fails its
+    // start later with a generic error.
+    let mut missing = Vec::new();
     for selection in plan.selections() {
         let request = &selection.request;
         // An exact binding, else the bundle's file by its pinned digest.
@@ -894,9 +896,10 @@ fn select_firmware(boot0: u32, catalog: Arc<Catalog>) -> Result<PciFirmware, Ser
                             "the GPU firmware digest does not match its pinned recipe",
                         )
                     })?;
-                available = true;
             }
-            Err(error) if error.kind == FirmwareError::Missing => (),
+            Err(error) if error.kind == FirmwareError::Missing => {
+                missing.push(request.name.clone());
+            }
             Err(error) => {
                 output::arguments(format_args!(
                     "GPU {name}: firmware {} refused: {error:?}\n",
@@ -909,10 +912,13 @@ fn select_firmware(boot0: u32, catalog: Arc<Catalog>) -> Result<PciFirmware, Ser
         }
         names.push(request.name.clone());
     }
-    if !available {
+    if !missing.is_empty() {
         output::arguments(format_args!(
-            "GPU {name}: the USB's firmware bundle lacks this chip's files; `stela repair` \
-             completes it\n"
+            "GPU {name}: the USB's firmware bundle lacks {} of this chip's {} files ({}); \
+             `stela repair` completes it\n",
+            missing.len(),
+            names.len(),
+            missing.join(", ")
         ));
         return Err(ServiceError::Refused(NO_FIRMWARE));
     }
@@ -1289,7 +1295,7 @@ fn cold_refusal(
     ServiceError::Refused("the GPU's original cold handoff was refused")
 }
 
-/// Why a GPU was refused when the USB holds no firmware for its chip.
+/// Why a GPU was refused when the USB lacks any of its chip's firmware files.
 const NO_FIRMWARE: &str = "no pinned firmware for the observed GPU chipset was loaded";
 
 /// An NVIDIA adapter [`claim_all`] did not claim, for the boot screen
@@ -1843,7 +1849,7 @@ fn mount_and_start(
     }
     let job = completed
         .take()
-        .ok_or(environment_error(WorkError::CorruptContext))?;
+        .ok_or_else(|| environment_error(WorkError::corrupt()))?;
     drop(joined.into_job());
     drop(ready);
     Ok((owner, threads, job))
@@ -2619,8 +2625,9 @@ enum Look {
 /// have moved. Most pumps run for a call a PE posted or a Linux timer. The
 /// fallback look every [`LOOK_FALLBACK_NS`] is for a device no waiter
 /// watches: while one waits on the only device's timeline, every fence it
-/// signals reaches the waiter, which asks for the look itself, so the
-/// fallback only starts the waiters of new timelines.
+/// signals reaches the waiter, which asks for the look itself, so while
+/// every device's waiter waits the fallback only starts the waiters of new
+/// timelines.
 fn look_due(gpu: &Installed) -> Look {
     let fired = FIRED.load(Ordering::Acquire);
     let interrupted = LOOKED.swap(fired, Ordering::Relaxed) != fired;
@@ -2637,7 +2644,7 @@ fn look_due(gpu: &Installed) -> Look {
         Look::Device
     } else if !fallback {
         Look::No
-    } else if gate::shared().len() == 1 && waiter::watching() {
+    } else if waiter::watching(gate::shared().len()) {
         Look::Waiters
     } else {
         Look::Device

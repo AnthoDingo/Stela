@@ -26,7 +26,10 @@
 //! would refuse (`installed::reinitialize`), blanking a foreign SEP area
 //! only for a machine that never booted. It adds the pinned firmware the
 //! last boot asked for and the USB lacks (`firmware::requested`), keeping
-//! what the USB holds, and names files without a pinned source.
+//! what the USB holds, and names files without a pinned source. An
+//! automatic Metal plugin repair that ran and did not install the plugin
+//! becomes a request again (`installed::bundle_repair_again`), so it runs
+//! at the install's next start.
 use super::{
     CHOICES_PATH, Environment, LOADER_PATH, RECORD, Record, Reported, Request, apply_install,
     bundle, check_bundle_revision, describe_install, ecid::Ecid, fix, host::Host, host::bytes_text,
@@ -257,7 +260,7 @@ fn firmware_status(record: &Record, report: &mut Report) {
     let requested = match super::firmware::requested(&record.esp, &tool) {
         Ok(requested) => requested,
         Err(error) => {
-            report.problem(format!("the USB's host firmware: {error:#}"));
+            report.problem(format!("the stick's host firmware: {error:#}"));
             return;
         }
     };
@@ -279,7 +282,7 @@ fn firmware_status(record: &Record, report: &mut Report) {
     let repair = report.fix("repair");
     for request in &requested.pinned {
         report.problem(format!(
-            "the last boot asked for firmware {}, which the USB lacks: {repair} adds it",
+            "the last boot asked for firmware {}, which the stick lacks: {repair} adds it",
             super::firmware::describe(request)
         ));
     }
@@ -357,7 +360,7 @@ fn bundle_status(environment: &Environment<'_>, record: &Record, report: &mut Re
     }
     if let Some(next) = &record.replacing {
         report.problem(format!(
-            "the update to macOS {next} stopped before its copy was complete, so this USB cannot \
+            "the switch to macOS {next} stopped before its copy was complete, so this stick cannot \
              install macOS until it is: {} finishes it",
             report.fix("repair")
         ));
@@ -378,7 +381,7 @@ fn bundle_status(environment: &Environment<'_>, record: &Record, report: &mut Re
                 super::medium::reported_damage(&record.esp, record.medium_checked.unwrap_or(0))
             {
                 problems.push(format!(
-                    "{} failed its block check when an install read it (the USB's boot log \
+                    "{} failed its block check when an install read it (the stick's boot log \
                      says so)",
                     medium.directory().join(&piece).display()
                 ));
@@ -619,6 +622,24 @@ fn install_status(
         state::Nvram::Blank => report.line("NVRAM", "blank"),
         state::Nvram::Valid(variables) => {
             report.line("next boot", state::next_boot(&variables));
+            use stela_boot_core::bundle_repair::Record;
+            match Record::read(&variables) {
+                Record::Attempted | Record::Retried | Record::Other => {
+                    let fix = report.fix("repair");
+                    report.line(
+                        "Metal plugin",
+                        format!(
+                            "the automatic repair ran and did not install it; {fix} lets it \
+                             run again at the next start"
+                        ),
+                    )
+                }
+                Record::Pending | Record::Installed | Record::Retry => report.line(
+                    "Metal plugin",
+                    "the automatic repair runs at the next start",
+                ),
+                Record::None => {}
+            }
             for name in [
                 boot_selection::OTA_RESULT,
                 boot_selection::OTA_FAILURE_REASON,
@@ -754,11 +775,12 @@ pub(super) fn status(environment: &Environment<'_>, usb: &Path, full: bool) -> R
     .into())
 }
 
-/// The report line for the device skips `by` ends
-/// (`boot_log::clear_device_skips`): empty when the USB's log names none.
-pub(super) fn device_skips(esp: &Path, by: &str, dry_run: bool) -> Result<String> {
+/// The report line for the device skips the command ends once it has
+/// done the rest (`boot_log::clear_device_skips`, [`end_device_skips`]):
+/// empty when the USB's log names none. Nothing is written here.
+pub(super) fn device_skips(esp: &Path, dry_run: bool) -> Result<String> {
     let log = esp.join(crate::efi::BOOT_LOG);
-    let named = crate::boot_log::clear_device_skips(&log, by, dry_run)?;
+    let named = crate::boot_log::clear_device_skips(&log, "", true)?;
     Ok(match (named.is_empty(), dry_run) {
         (true, _) => String::new(),
         (false, true) => format!(
@@ -772,8 +794,25 @@ pub(super) fn device_skips(esp: &Path, by: &str, dry_run: bool) -> Result<String
     })
 }
 
-/// `repair`.
+/// End the device skips the USB's log at `esp` names, as `by`: the last
+/// write of a command that succeeded, so one that stops keeps them and the
+/// device that froze the PC stays skipped.
+pub(super) fn end_device_skips(esp: &Path, by: &str) -> Result<()> {
+    crate::boot_log::clear_device_skips(&esp.join(crate::efi::BOOT_LOG), by, false)?;
+    Ok(())
+}
+
+/// `repair`: the device skips end once everything else is done.
 pub(super) fn repair(environment: &Environment<'_>, command: &Request) -> Result<String> {
+    let text = repair_steps(environment, command)?;
+    if !command.dry_run {
+        let record = read_record(environment, &command.usb)?;
+        end_device_skips(&record.esp, "stela repair")?;
+    }
+    Ok(text)
+}
+
+fn repair_steps(environment: &Environment<'_>, command: &Request) -> Result<String> {
     let usb = &command.usb;
     let mut record = read_record(environment, usb)?;
     update::ready(&record, usb)?;
@@ -790,7 +829,7 @@ pub(super) fn repair(environment: &Environment<'_>, command: &Request) -> Result
     debug_assert!(record.replacing.is_none());
     let esp = record.esp.clone();
     let mut text = format!("Stela repair on {}:\n", esp.display());
-    text.push_str(&device_skips(&esp, "stela repair", command.dry_run)?);
+    text.push_str(&device_skips(&esp, command.dry_run)?);
     let Ok(tool) = fs::read(esp.join(LOADER_PATH)) else {
         bail!("{} has no stela.efi: {}", esp.display(), fix(usb, "update"));
     };
@@ -860,7 +899,7 @@ pub(super) fn repair(environment: &Environment<'_>, command: &Request) -> Result
             text,
             "  install medium {}",
             match record.active_medium() {
-                Some(m) if m.remote => "streams from Apple: no piece is on the USB to check",
+                Some(m) if m.remote => "streams from Apple: no piece is on the stick to check",
                 Some(_) => "incomplete: the missing or short pieces are written again",
                 None => "none",
             }
@@ -1145,13 +1184,40 @@ pub(super) fn repair(environment: &Environment<'_>, command: &Request) -> Result
                 "  disks          erase the file system on {}, install \"{}\"'s SSD partition",
                 region.identifier, install.name
             )?;
-            foreign.push(region);
+            foreign.push((region, install.disk.machine_state_offset));
         } else {
             notes.push(format!(
                 "{}: {} erases it",
                 foreign_problem(&install.name, &region.identifier),
                 fix(usb, "repair --erase-target")
             ));
+        }
+    }
+    // An automatic Metal plugin repair that ran and did not install the
+    // plugin runs again at the install's next start, as the stop it left
+    // asks; a PC without a serial console has no other way.
+    let mut bundle_repairs = Vec::new();
+    for install in &record.installs {
+        match installed::bundle_repair_again(environment.host, &install.disk) {
+            Ok(Some(again)) => {
+                writeln!(
+                    text,
+                    "  Metal plugin   install \"{}\": the automatic repair {} at the next start",
+                    install.name,
+                    match command.dry_run {
+                        true => "would run again",
+                        false => "runs again",
+                    }
+                )?;
+                bundle_repairs.push(again);
+            }
+            Ok(None) => {}
+            Err(error) => {
+                let note = unreachable_note(&install.name, &error);
+                if !notes.contains(&note) {
+                    notes.push(note);
+                }
+            }
         }
     }
     for note in &notes {
@@ -1182,8 +1248,8 @@ pub(super) fn repair(environment: &Environment<'_>, command: &Request) -> Result
     {
         store.repair()?;
     }
-    for region in &foreign {
-        installed::erase_foreign(environment.host, region)?;
+    for (region, state_offset) in &foreign {
+        installed::erase_foreign(environment.host, region, *state_offset)?;
     }
     for fresh in &reinitialize {
         fresh.area.write(environment.host, 0, &fresh.bytes)?;
@@ -1192,6 +1258,9 @@ pub(super) fn repair(environment: &Environment<'_>, command: &Request) -> Result
             "{} did not read back as written",
             fresh.area.describe()
         );
+    }
+    for again in &bundle_repairs {
+        again.write(environment.host)?;
     }
     if let Some((plan, obtained)) = install {
         let environment = Environment {
