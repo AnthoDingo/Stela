@@ -89,6 +89,9 @@ pub(crate) struct VectorCache {
     derived_used: [u32; DERIVED_HOSTS],
     /// The bank register a recipe is filling, or `NONE`.
     deriving: u8,
+    /// Whether the bank kept a value since the cache was last forgotten:
+    /// otherwise every bank register is free.
+    banked: bool,
     /// Whether that home's old value is gone: a destination written whole,
     /// whose vector no recipe may read until the write ends.
     fresh: bool,
@@ -108,6 +111,7 @@ impl Default for VectorCache {
             derived: [None; DERIVED_HOSTS],
             derived_used: [0; DERIVED_HOSTS],
             deriving: NONE,
+            banked: false,
             fresh: false,
         }
     }
@@ -130,6 +134,10 @@ impl VectorCache {
     /// The dirty homes, for a fault site here.
     pub(crate) fn dirty_homes(&self) -> DirtyHomes {
         let mut homes = [None; HOSTS];
+        // Every encoder and fault site asks: most blocks hold no vector.
+        if self.dirty == 0 {
+            return homes;
+        }
         for (index, owner) in self.owner.iter().enumerate() {
             if *owner != NONE && self.is_dirty(*owner) {
                 homes[index] = Some((*owner, FIRST_HOST + index as u8));
@@ -140,6 +148,11 @@ impl VectorCache {
     /// The pool registers that hold a guest vector: no recipe may write one,
     /// except the destination home it is writing.
     pub(crate) fn occupied(&self) -> u32 {
+        // An inactive cache holds nothing: turning it off forgets every
+        // home and derived value, and only an active one takes them.
+        if !self.active {
+            return 0;
+        }
         let occupied = self
             .owner
             .iter()
@@ -148,18 +161,24 @@ impl VectorCache {
             .fold(0, |mask, (index, _)| {
                 mask | 1 << (usize::from(FIRST_HOST) + index)
             });
-        let occupied = self
-            .derived
+        let occupied = match self.banked {
+            false => occupied,
+            true => self.derived_occupied(occupied),
+        };
+        [self.writing, self.deriving]
+            .into_iter()
+            .filter(|host| *host != NONE)
+            .fold(occupied, |mask, host| mask & !(1 << host))
+    }
+    /// `occupied` with the bank registers that hold a derived value.
+    fn derived_occupied(&self, occupied: u32) -> u32 {
+        self.derived
             .iter()
             .enumerate()
             .filter(|(_, derived)| derived.is_some())
             .fold(occupied, |mask, (index, _)| {
                 mask | 1 << (usize::from(FIRST_DERIVED) + index)
-            });
-        [self.writing, self.deriving]
-            .into_iter()
-            .filter(|host| *host != NONE)
-            .fold(occupied, |mask, host| mask & !(1 << host))
+            })
     }
     fn touch(&mut self, index: usize) {
         self.clock += 1;
@@ -211,7 +230,8 @@ impl Code {
     /// register, or the least recently used one, whose vector is stored
     /// first if dirty.
     pub(crate) fn allocate_vector(&mut self, vector: u8) -> u8 {
-        debug_assert!(self.vectors.active);
+        // [`VectorCache::occupied`] counts on it.
+        assert!(self.vectors.active, "homes live in an active cache");
         if let Some(host) = self.vectors.home(vector) {
             return host;
         }
@@ -293,6 +313,7 @@ impl Code {
         };
         let host = FIRST_DERIVED + index as u8;
         self.vectors.derived[index] = Some(derived);
+        self.vectors.banked = true;
         self.vectors.clock += 1;
         self.vectors.derived_used[index] = self.vectors.clock;
         self.vectors.deriving = host;
