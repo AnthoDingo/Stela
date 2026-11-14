@@ -1,0 +1,38 @@
+[package]
+name = "stela-gui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "A window over stela's commands: picks a command and its options, runs it and shows its output"
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[[bin]]
+name = "stela-gui"
+path = "src/main.rs"
+
+[dependencies]
+eframe = "0.33"
+stela-cli.workspace = true
+
+[build-dependencies]
+winresource = "0.1"
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+raw-window-handle = "0.6"
+windows = { version = "0.61", features = [
+    "Win32_System_Com",
+    "Win32_UI_Shell",
+] }
+windows-sys = { version = "0.61", features = [
+    "Win32_System_Console",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[lints]
+workspace = true

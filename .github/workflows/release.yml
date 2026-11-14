@@ -283,23 +283,26 @@ jobs:
         run: |
           export STELA_EFI="$PWD/efi/stela.efi"
           for target in ${{ matrix.targets }}; do
-            cargo build --release --locked -p stela-cli --target "$target"
+            # stela-gui links the same stela-cli, with the same stela.efi.
+            cargo build --release --locked -p stela-cli -p stela-gui --target "$target"
           done
           mkdir -p "$ARCHIVE"
-          case "$RUNNER_OS" in
-            Windows) cp target/x86_64-pc-windows-msvc/release/stela.exe "$ARCHIVE/" ;;
-            macOS)
-              lipo -create -output "$ARCHIVE/stela" \
-                target/aarch64-apple-darwin/release/stela target/x86_64-apple-darwin/release/stela
-              codesign --force --sign - "$ARCHIVE/stela"
-              lipo -info "$ARCHIVE/stela"
-              ;;
-            *) cp target/x86_64-unknown-linux-gnu/release/stela "$ARCHIVE/" ;;
-          esac
+          for name in stela stela-gui; do
+            case "$RUNNER_OS" in
+              Windows) cp "target/x86_64-pc-windows-msvc/release/$name.exe" "$ARCHIVE/" ;;
+              macOS)
+                lipo -create -output "$ARCHIVE/$name" \
+                  "target/aarch64-apple-darwin/release/$name" "target/x86_64-apple-darwin/release/$name"
+                codesign --force --sign - "$ARCHIVE/$name"
+                lipo -info "$ARCHIVE/$name"
+                ;;
+              *) cp "target/x86_64-unknown-linux-gnu/release/$name" "$ARCHIVE/" ;;
+            esac
+          done
 
       - name: Check stela
         run: |
-          binary="$(ls "$ARCHIVE"/stela*)"
+          binary="$(ls "$ARCHIVE"/stela "$ARCHIVE"/stela.exe 2>/dev/null || true)"
           expected="stela ${{ needs.version.outputs.version }}"
           actual="$("$binary" --version)"
           [[ "$actual" == "$expected" ]] || { echo "::error::$binary --version printed '$actual', not '$expected'"; exit 1; }
@@ -309,7 +312,10 @@ jobs:
             || { echo "::error::$binary does not hold the stela.efi the efi job built"; exit 1; }
           size="$(wc -c < "$binary")"
           "$binary" create --help >/dev/null
-          echo "$ARCHIVE: $size bytes" >> "$GITHUB_STEP_SUMMARY"
+          gui="$(ls "$ARCHIVE"/stela-gui "$ARCHIVE"/stela-gui.exe 2>/dev/null || true)"
+          "$python" -c 'import sys; sys.exit(open(sys.argv[1], "rb").read() not in open(sys.argv[2], "rb").read())' efi/stela.efi "$gui" \
+            || { echo "::error::$gui does not hold the stela.efi the efi job built"; exit 1; }
+          echo "$ARCHIVE: $size bytes, stela-gui $(wc -c < "$gui") bytes" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Package
         run: |

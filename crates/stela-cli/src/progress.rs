@@ -1,13 +1,89 @@
 //! Terminal-only progress; redirected commands keep their ordinary output.
 //! Once the setup wizard has drawn its timeline, each phase continues it: a
-//! running step on the rail, then the finished step it leaves behind.
+//! running step on the rail, then the finished step it leaves behind. A
+//! program that embeds stela reads the running phase with [`running`].
 use indicatif::{HumanBytes, ProgressBar, ProgressStyle};
 use std::{
     io::{self, IsTerminal, Read, Write},
     path::Path,
-    sync::OnceLock,
+    sync::{
+        Mutex, MutexGuard, OnceLock, PoisonError,
+        atomic::{AtomicU64, Ordering},
+    },
     time::Duration,
 };
+
+/// The running phase, as a program embedding stela shows it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Progress {
+    /// What it does, such as `Downloading macOS onto USB`.
+    pub label: String,
+    /// Bytes done, of `total`.
+    pub done: u64,
+    /// Bytes to do; `None` for a phase without a size.
+    pub total: Option<u64>,
+}
+
+/// The newest phase that has not ended, with its number: phases nest, and
+/// one that ends after a newer one began changes nothing.
+#[derive(Default)]
+struct Tracker(Option<(u64, Progress)>);
+
+impl Tracker {
+    fn begin(&mut self, number: u64, label: &str, total: Option<u64>) {
+        let progress = Progress {
+            label: label.to_owned(),
+            done: 0,
+            total,
+        };
+        self.0 = Some((number, progress));
+    }
+
+    fn update(&mut self, number: u64, change: impl FnOnce(&mut Progress)) {
+        if let Some((running, progress)) = self.0.as_mut()
+            && *running == number
+        {
+            change(progress);
+        }
+    }
+
+    fn end(&mut self, number: u64) {
+        if self
+            .0
+            .as_ref()
+            .is_some_and(|(running, _)| *running == number)
+        {
+            self.0 = None;
+        }
+    }
+}
+
+static CURRENT: Mutex<Tracker> = Mutex::new(Tracker(None));
+static NUMBER: AtomicU64 = AtomicU64::new(0);
+
+fn current() -> MutexGuard<'static, Tracker> {
+    CURRENT.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// The running phase, if any.
+pub(crate) fn running() -> Option<Progress> {
+    current().0.as_ref().map(|(_, progress)| progress.clone())
+}
+
+/// Start phase `label`, of `total` bytes when known; its number.
+fn begin(label: &str, total: Option<u64>) -> u64 {
+    let number = NUMBER.fetch_add(1, Ordering::Relaxed);
+    current().begin(number, label, total);
+    number
+}
+
+fn update(number: u64, change: impl FnOnce(&mut Progress)) {
+    current().update(number, change);
+}
+
+fn end(number: u64) {
+    current().end(number);
+}
 
 /// The wizard timeline's styled glyphs: a running, finished and stopped
 /// step, and the rail between steps.
@@ -46,6 +122,8 @@ pub(crate) struct Phase {
     bar: Option<ProgressBar>,
     label: String,
     finished: bool,
+    /// Its number in [`CURRENT`].
+    number: u64,
 }
 
 impl Phase {
@@ -67,10 +145,12 @@ impl Phase {
             bar.enable_steady_tick(Duration::from_millis(200));
             bar
         });
+        let number = begin(&label, Some(bytes));
         Self {
             bar,
             label,
             finished: false,
+            number,
         }
     }
 
@@ -85,20 +165,26 @@ impl Phase {
             bar.enable_steady_tick(Duration::from_secs(1));
             bar
         });
+        let number = begin(&label, None);
         Self {
             bar,
             label,
             finished: false,
+            number,
         }
     }
 
     pub(crate) fn advance(&self, bytes: u64) {
+        update(self.number, |progress| {
+            progress.done = progress.done.saturating_add(bytes);
+        });
         if let Some(bar) = &self.bar {
             bar.inc(bytes);
         }
     }
 
     pub(crate) fn position(&self, bytes: u64) {
+        update(self.number, |progress| progress.done = bytes);
         if let Some(bar) = &self.bar {
             bar.set_position(bytes);
             bar.reset_eta();
@@ -106,12 +192,16 @@ impl Phase {
     }
 
     pub(crate) fn add_work(&self, bytes: u64) {
+        update(self.number, |progress| {
+            progress.total = Some(progress.total.unwrap_or(0).saturating_add(bytes));
+        });
         if let Some(bar) = &self.bar {
             bar.set_length(bar.length().unwrap_or(0).saturating_add(bytes));
         }
     }
 
     pub(crate) fn finish(mut self) {
+        end(self.number);
         if let Some(bar) = &self.bar {
             // A one-line summary replaces the finished timers. Off the
             // timeline, a step without a size leaves nothing behind.
@@ -143,6 +233,7 @@ fn summary(glyph: fn(&Rail) -> &str) -> ProgressStyle {
 
 impl Drop for Phase {
     fn drop(&mut self) {
+        end(self.number);
         if !self.finished
             && let Some(bar) = &self.bar
         {
@@ -242,6 +333,32 @@ fn invalidate_mapped(file: &std::fs::File) -> io::Result<()> {
     match invalidated {
         0 => Ok(()),
         _ => Err(error),
+    }
+}
+
+#[cfg(test)]
+mod tracker_tests {
+    use super::Tracker;
+
+    fn seen(tracker: &Tracker) -> Option<(&str, u64, Option<u64>)> {
+        let (_, progress) = tracker.0.as_ref()?;
+        Some((progress.label.as_str(), progress.done, progress.total))
+    }
+
+    #[test]
+    fn the_newest_phase_runs_until_it_ends() {
+        let mut tracker = Tracker::default();
+        tracker.begin(1, "Downloading", Some(100));
+        tracker.update(1, |p| p.done += 30);
+        tracker.update(1, |p| p.total = p.total.map(|t| t + 50));
+        assert_eq!(seen(&tracker), Some(("Downloading", 30, Some(150))));
+        tracker.begin(2, "Preparing", None);
+        tracker.update(1, |p| p.done = 90);
+        assert_eq!(seen(&tracker), Some(("Preparing", 0, None)));
+        tracker.end(1);
+        assert_eq!(seen(&tracker), Some(("Preparing", 0, None)));
+        tracker.end(2);
+        assert_eq!(seen(&tracker), None);
     }
 }
 
