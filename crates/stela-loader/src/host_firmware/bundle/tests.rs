@@ -21,8 +21,8 @@ fn the_complete_bundle_holds_every_recipe_once_by_content() {
     assert_eq!(count, objects.len());
     // The RTL8168H and RTL8168M share a file, as the RTL9151A and RTL9151AS do.
     assert_eq!(count + 2, recipes().count());
-    // The recipes' recorded lengths: 86 files, 115.8 MiB.
-    assert_eq!((count, bytes), (86, 121_467_160), "{count} {bytes}");
+    // The recipes' recorded lengths: 90 files, 120.2 MiB.
+    assert_eq!((count, bytes), (92, 126_658_880), "{count} {bytes}");
     // The GPU's large images come last, for a volume short of room.
     assert_eq!(objects.last().unwrap().length, 63_571_696);
     let manifest = manifest(&complete()).unwrap();
@@ -79,7 +79,11 @@ fn members(selection: &Selection) -> Vec<&'static str> {
 }
 
 /// The USB Bluetooth and Ethernet files every boot reads, sorted.
-const USB: [&str; 12] = [
+const USB: [&str; 16] = [
+    "intel/ibt-12-16.ddc",
+    "intel/ibt-12-16.sfi",
+    "intel/ibt-17-16-1.ddc",
+    "intel/ibt-17-16-1.sfi",
     "intel/ibt-20-1-3.ddc",
     "intel/ibt-20-1-3.sfi",
     "mediatek/BT_RAM_CODE_MT7922_1_1_hdr.bin",

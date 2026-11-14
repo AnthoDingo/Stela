@@ -9,10 +9,11 @@
 use super::{
     boot::{self, BootIo, ProductResetPolicy, RomBoot},
     firmware::{self, Family},
+    gen1,
     identity::{self, IdentityError, Observed, Profile, StageError},
     link::{Inputs, Station, Wifi},
     platform::{self, Observations},
-    power::{self, ManagementSession, Power},
+    power::{self, ManagementSession, Power, Silicon},
     radio::bios::service::{BiosIo, DmiIdentity},
 };
 use crate::{
@@ -68,6 +69,15 @@ pub enum AttachError {
     },
     Step(String),
     Boot(boot::Error),
+    /// An 8000- or 9000-family function, identified and its image staged.
+    /// An 8000-family one also ran its INIT image to `alive` and was stopped
+    /// again: what follows ALIVE (NVM, calibration, the RT image) is not
+    /// ported, nor is the 9000 family's transport.
+    Gen1Transport {
+        family: gen1::Family,
+        firmware: &'static str,
+        alive: Option<gen1::boot::Alive>,
+    },
 }
 
 impl fmt::Display for AttachError {
@@ -76,6 +86,21 @@ impl fmt::Display for AttachError {
             Self::NoPinnedFirmware { family, name } => {
                 write!(f, "no pinned firmware for {family:?} ({name})")
             }
+            Self::Gen1Transport {
+                family,
+                firmware,
+                alive: Some(alive),
+            } => write!(
+                f,
+                "{family:?}: {firmware} INIT image ALIVE (version {}.{:08x}, scheduler at {:#x});                  the boot after ALIVE is not ported",
+                alive.ucode_major, alive.ucode_minor, alive.scheduler_base
+            ),
+            Self::Gen1Transport {
+                family, firmware, ..
+            } => write!(
+                f,
+                "{family:?} family identified and {firmware} staged; its gen1 transport is not ported"
+            ),
             error => write!(f, "{error:?}"),
         }
     }
@@ -106,6 +131,37 @@ pub unsafe fn attach<Q: BootIo, B: BiosIo>(
 ) -> Result<Station<Q, B>, AttachError> {
     let hardware_revision = io.read32(HW_REV).map_err(AttachError::Register)?;
     let radio_id = io.read32(HW_RF_ID).map_err(AttachError::Register)?;
+    if gen1::device(pci.device).is_some() {
+        let profile = gen1::Profile::select(Observed {
+            vendor: pci.vendor,
+            device: pci.device,
+            subsystem_vendor: pci.subsystem_vendor,
+            subsystem_device: pci.subsystem_device,
+            pci_revision: pci.revision,
+            link_speed: pci.link_speed,
+            hardware_revision,
+            radio_id,
+            silicon: Silicon::default(),
+        })
+        .map_err(AttachError::Identity)?;
+        let staged = profile.stage(inputs.firmware).map_err(staging)?;
+        let (family, firmware) = (profile.family(), profile.firmware_name());
+        let alive = match family {
+            // SAFETY: the caller's contract is the gen1 boot's.
+            gen1::Family::F8000 => Some(
+                unsafe { gen1::boot::init_alive(io, profile, staged, inputs.pages, domain) }
+                    .map_err(AttachError::Boot)?,
+            ),
+            // The 9000 family's multi-queue RX is not ported: nothing is
+            // woken or written.
+            gen1::Family::F9000 => None,
+        };
+        return Err(AttachError::Gen1Transport {
+            family,
+            firmware,
+            alive,
+        });
+    }
     let (family, _) =
         identity::device(pci.device).ok_or(AttachError::Identity(IdentityError::UnsupportedPci))?;
     let silicon = power::read_silicon(
@@ -152,6 +208,19 @@ pub unsafe fn attach<Q: BootIo, B: BiosIo>(
     Ok(unsafe { Wifi::new(boot, inputs) })
 }
 
+fn staging(error: StageError) -> AttachError {
+    match error {
+        StageError::Resource { request, error } => AttachError::Resource {
+            name: request.name,
+            kind: error.kind,
+        },
+        StageError::Firmware { request, error } => AttachError::Firmware {
+            name: request.name,
+            error,
+        },
+    }
+}
+
 /// Stage `profile`'s firmware, wake the function and ROM-boot it.
 ///
 /// # Safety
@@ -175,14 +244,7 @@ pub(super) unsafe fn start<Q: BootIo>(
                 name: request.name,
             }
         }
-        StageError::Resource { request, error } => AttachError::Resource {
-            name: request.name,
-            kind: error.kind,
-        },
-        StageError::Firmware { request, error } => AttachError::Firmware {
-            name: request.name,
-            error,
-        },
+        error => staging(error),
     })?;
     let mut power = Power::new(io, profile);
     if vector {

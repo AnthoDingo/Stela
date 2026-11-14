@@ -60,7 +60,8 @@ pub(super) fn prepare_image(snapshot: &Snapshot) -> Result<EngineImage> {
         .chain(
             screen
                 .iter()
-                .filter_map(|s| s.flip)
+                .flat_map(|s| [s.flip, s.backlight])
+                .flatten()
                 .map(|r| r as u64 + PAGE),
         )
         .chain(core::iter::once(apic + PAGE))
@@ -328,8 +329,9 @@ pub(super) fn map(
             end.next_multiple_of(PAGE) - start,
             video,
         )?;
-        // The registers that flip between its frames are device registers.
-        if let Some(registers) = screen.flip {
+        // The registers that flip between its frames, and the panel
+        // backlight's, are device registers.
+        for registers in [screen.flip, screen.backlight].into_iter().flatten() {
             let page = registers as u64 & !(PAGE - 1);
             tables::map_page(frames, root, page, page, PRESENT | WRITABLE | NX | UNCACHED)?;
         }
@@ -445,7 +447,7 @@ pub(super) fn map(
                 video,
             )?;
         }
-        if let Some(registers) = screen.flip {
+        for registers in [screen.flip, screen.backlight].into_iter().flatten() {
             let page = registers as u64 & !(PAGE - 1);
             tables::map_page(frames, root, layout::physical(page), page, data | UNCACHED)?;
         }

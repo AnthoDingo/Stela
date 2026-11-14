@@ -459,6 +459,52 @@ pub const INTEL_RSA: &[Recipe] = &[
         license: &INTEL_LICENSE,
         consumer: Consumer::IntelRsa,
     },
+    // The 8265's Bluetooth (8087:0a2b), a legacy variant 0x0c boot loader.
+    Recipe {
+        image: Artifact {
+            source: LINUX_FIRMWARE,
+            revision: INTEL_RSA_REVISION,
+            member: "intel/ibt-12-16.sfi",
+            length: 585744,
+            sha256: "d28b4dcc3bf607f9179efc0b492cd94dd3ebd61eb4257cc35cf146f97e618215",
+        },
+        license: &INTEL_LICENSE,
+        consumer: Consumer::IntelRsa,
+    },
+    Recipe {
+        image: Artifact {
+            source: LINUX_FIRMWARE,
+            revision: INTEL_RSA_REVISION,
+            member: "intel/ibt-12-16.ddc",
+            length: 14,
+            sha256: "3ca252ad20e8f76d6d906536bf9e5abe6654c657183584a48e90a0dcf40ac4d5",
+        },
+        license: &INTEL_LICENSE,
+        consumer: Consumer::IntelRsa,
+    },
+    // The 9560's Bluetooth (8087:0aaa), variant 0x11 hardware 16 firmware 1.
+    Recipe {
+        image: Artifact {
+            source: LINUX_FIRMWARE,
+            revision: INTEL_RSA_REVISION,
+            member: "intel/ibt-17-16-1.sfi",
+            length: 653852,
+            sha256: "a47758dcf9091bd09779127f64cf105d5f3f85fc8aff251fabf0d5c27e088224",
+        },
+        license: &INTEL_LICENSE,
+        consumer: Consumer::IntelRsa,
+    },
+    Recipe {
+        image: Artifact {
+            source: LINUX_FIRMWARE,
+            revision: INTEL_RSA_REVISION,
+            member: "intel/ibt-17-16-1.ddc",
+            length: 14,
+            sha256: "a251dac7382530032a8e74460edc5e22212437f70c5f57be101fb19e637aa5a8",
+        },
+        license: &INTEL_LICENSE,
+        consumer: Consumer::IntelRsa,
+    },
 ];
 
 const WIFI_FIRMWARE_LICENSE: Artifact = Artifact {
@@ -589,6 +635,17 @@ pub const INTEL_WIFI: &[Recipe] = &[
         "intel/iwlwifi/iwlwifi-sc-a0-fm-c0-c106.ucode",
         2226844,
         "7a4b428edf7dfc5ec1573bc1b8f98804b52e3a469aeec8187cae9aae66b583fd",
+    ),
+    // Gen1 families (`stela_drivers::net::wifi::intel::gen1`).
+    intel_wifi(
+        "intel/iwlwifi/iwlwifi-8265-36.ucode",
+        2432528,
+        "1336afcd028ed094d1fe33893c84c273bb5711be52970040344a75a12f276d56",
+    ),
+    intel_wifi(
+        "intel/iwlwifi/iwlwifi-9000-pu-b0-jf-b0-46.ucode",
+        1519568,
+        "9a0c5d938646942f9798e6212579c25771e4bb44301cd409b82abe361ca2c3e0",
     ),
 ];
 pub const MEDIATEK_WIFI: &[Recipe] = &[
@@ -961,8 +1018,8 @@ pub fn require_gsp(inventory: &mut Inventory, chip: &str) -> Result<(), Error> {
 ///   (`stela_drivers::net::wifi::realtek::identity::Profile::chip_target`);
 /// - every image and PNVM an Intel device can select by its MAC, radio and
 ///   steps, which only a boot reads, under the device's binding
-///   (`stela_drivers::net::wifi::intel::identity::device_images`, which this
-///   table mirrors).
+///   (`stela_drivers::net::wifi::intel::identity::device_images` and
+///   `gen1::device_images`, which this table mirrors).
 ///
 /// Returns whether the adapter is one whose files are now required.
 pub fn require_wifi(inventory: &mut Inventory, vendor: u16, device: u16) -> Result<bool, Error> {
@@ -1045,6 +1102,10 @@ fn intel_wifi_images(device: u16) -> &'static [&'static str] {
         0xa840 | 0x7740 | 0x4d40 => &["iwlwifi-bz-b0-fm-c0-c106.ucode", "iwlwifi-bz-b0-fm-c0.pnvm"],
         // Sc MACs.
         0xe440 | 0xe340 | 0xd340 | 0x6e70 | 0xd240 => &["iwlwifi-sc-a0-fm-c0-c106.ucode"],
+        // Gen1: the 8265 and the 9560
+        // (`stela_drivers::net::wifi::intel::gen1::device_images`).
+        0x24fd => &["iwlwifi-8265-36.ucode"],
+        0x9df0 => &["iwlwifi-9000-pu-b0-jf-b0-46.ucode"],
         _ => &[],
     }
 }
@@ -1274,10 +1335,21 @@ fn select_intel_rsa(request: &Request) -> Option<&'static Recipe> {
     {
         return None;
     }
-    // These filenames are selected only by observed variant0x14/hw1/fw3.
-    // Keep every other exact boot-loader field verbatim in the manifest.
+    // `Identity::filename` names variant 0x11 (the 9560) and 0x14 images by
+    // hardware and firmware revision, and the legacy variant 0x0c ones (the 8265) by the
+    // boot loader's device revision alone. Keep every other exact
+    // boot-loader field verbatim in the manifest.
     let fields: Vec<_> = request.target.revision.split(':').collect();
-    if fields.len() != 11 || fields[..4] != ["37", "14", "01", "03"] {
+    if fields.len() != 11 || fields[0] != "37" || !fields[1..4].iter().all(|f| hex_field(f, 2)) {
+        return None;
+    }
+    let names: [&str; 2] = match (fields[1], fields[2], fields[3], fields[4]) {
+        ("14", "01", "03", _) => ["intel/ibt-20-1-3.sfi", "intel/ibt-20-1-3.ddc"],
+        ("11", "10", "01", _) => ["intel/ibt-17-16-1.sfi", "intel/ibt-17-16-1.ddc"],
+        ("0c", _, _, "dev-0010") => ["intel/ibt-12-16.sfi", "intel/ibt-12-16.ddc"],
+        _ => return None,
+    };
+    if !names.contains(&request.name.as_str()) {
         return None;
     }
     for (field, (prefix, count, digits)) in fields[4..].iter().zip([
@@ -1972,6 +2044,75 @@ mod tests {
             other.selections()[0].request.target.revision,
             revision.replace("dev-0005", "dev-0006")
         );
+    }
+
+    /// The 8265's legacy boot loader (variant 0x0c) names its image by the
+    /// device revision alone: 16 is what the Latitude 7490's reports.
+    #[test]
+    fn the_8265_bluetooth_takes_its_device_revisions_image() {
+        let revision = "37:0c:00:00:dev-0010:otp-00-00-00:key-00-00:locks-00-00-00:min-00-00-00:loader-1a-26-0f-00:unlock-00";
+        let inventory = |name: &str, revision: &str| {
+            let value = serde_json::json!({"schema":1,"complete":true,"requirements":[{
+                "name":name, "target":{"driver":"intel-bluetooth-usb-rsa","hardware":"usb:8087:0a2b:0001","revision":revision,"board":null},"minimum_bytes":1
+            }]});
+            Inventory::parse(&serde_json::to_vec(&value).unwrap()).unwrap()
+        };
+        for (name, length) in [("intel/ibt-12-16.sfi", 585744), ("intel/ibt-12-16.ddc", 14)] {
+            let plan = Plan::select(&inventory(name, revision)).unwrap();
+            assert_eq!(plan.selections()[0].recipe.image.member, name);
+            assert_eq!(plan.selections()[0].recipe.image.length, length);
+            assert_eq!(plan.selections()[0].request.target.revision, revision);
+        }
+        // Another device revision, another variant's image, or a name the
+        // variant does not take has no recipe.
+        for (name, revision) in [
+            (
+                "intel/ibt-12-16.sfi",
+                revision.replace("dev-0010", "dev-0011"),
+            ),
+            ("intel/ibt-20-1-3.sfi", revision.to_owned()),
+            ("intel/ibt-12-16.sfi", revision.replace("37:0c", "37:14")),
+            ("intel/ibt-11-5.sfi", revision.replace("37:0c", "37:0b")),
+        ] {
+            assert!(
+                Plan::select(&inventory(name, &revision)).is_err(),
+                "{name} {revision}"
+            );
+        }
+    }
+
+    /// The 9560's boot loader (variant 0x11) names its image by hardware
+    /// and firmware revision: 0x10 and 1 on the Latitude 7400 2-in-1.
+    #[test]
+    fn the_9560_bluetooth_takes_its_revisions_image() {
+        let revision = "37:11:10:01:dev-0000:otp-00-00-00:key-00-00:locks-00-00-00:min-00-00-00:loader-00-00-00-00:unlock-00";
+        let inventory = |name: &str, revision: &str| {
+            let value = serde_json::json!({"schema":1,"complete":true,"requirements":[{
+                "name":name, "target":{"driver":"intel-bluetooth-usb-rsa","hardware":"usb:8087:0aaa:0002","revision":revision,"board":null},"minimum_bytes":1
+            }]});
+            Inventory::parse(&serde_json::to_vec(&value).unwrap()).unwrap()
+        };
+        for (name, length) in [
+            ("intel/ibt-17-16-1.sfi", 653852),
+            ("intel/ibt-17-16-1.ddc", 14),
+        ] {
+            let plan = Plan::select(&inventory(name, revision)).unwrap();
+            assert_eq!(plan.selections()[0].recipe.image.member, name);
+            assert_eq!(plan.selections()[0].recipe.image.length, length);
+        }
+        // Another firmware revision, or another variant's image, has none.
+        for (name, revision) in [
+            (
+                "intel/ibt-17-16-1.sfi",
+                revision.replace("37:11:10:01", "37:11:10:02"),
+            ),
+            ("intel/ibt-20-1-3.sfi", revision.to_owned()),
+        ] {
+            assert!(
+                Plan::select(&inventory(name, &revision)).is_err(),
+                "{name} {revision}"
+            );
+        }
     }
 
     #[cfg(feature = "std")]

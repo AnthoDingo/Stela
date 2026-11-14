@@ -266,11 +266,11 @@ fn start(handoff: u64) -> Started {
     stela_drivers::on_wait(crate::status::tick);
     stela_drivers::on_work(device_starting);
     stela_drivers::budget::on_processor(processor_gs);
-    crate::status::take_screen(
-        handoff
-            .screen
-            .map(|screen| screen.relocated(layout::physical(screen.base as u64) as usize)),
-    );
+    let screen = handoff
+        .screen
+        .map(|screen| screen.relocated(layout::physical(screen.base as u64) as usize));
+    super::backlight::install(screen.and_then(|screen| screen.backlight));
+    crate::status::take_screen(screen);
     crate::status::replay(&handoff.history[..handoff.history_bytes]);
     crate::host_inventory::restore(&handoff.host[..handoff.host_bytes.min(handoff.host.len())]);
     output::arguments(format_args!(

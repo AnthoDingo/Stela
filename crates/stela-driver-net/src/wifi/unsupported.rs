@@ -7,11 +7,12 @@
 /// when a driver here takes it or no Linux driver lists it.
 pub fn reason(vendor: u16, device: u16) -> Option<&'static str> {
     Some(match (vendor, device) {
-        // iwlwifi, MVM op mode, pre-AX generations.
-        (0x8086, 0x2526 | 0x271b | 0x271c | 0x30dc | 0x31dc | 0x9df0 | 0xa370) => {
+        // iwlwifi, MVM op mode, pre-AX generations. The 9560 (0x9df0) and
+        // the 8265 (0x24fd) are identified by `intel::gen1` instead.
+        (0x8086, 0x2526 | 0x271b | 0x271c | 0x30dc | 0x31dc | 0xa370) => {
             "Intel Wireless-AC 9000 series (Linux iwlwifi): this generation has no driver here"
         }
-        (0x8086, 0x24f3 | 0x24f4 | 0x24f5 | 0x24f6 | 0x24fb | 0x24fd) => {
+        (0x8086, 0x24f3 | 0x24f4 | 0x24f5 | 0x24f6 | 0x24fb) => {
             "Intel Wireless 8000 series or 3168 (Linux iwlwifi): this generation has no driver here"
         }
         (0x8086, 0x08b1..=0x08b4 | 0x095a | 0x095b | 0x3165 | 0x3166) => {
@@ -170,13 +171,15 @@ mod tests {
             assert_eq!(reason(vendor, device), None, "{vendor:04x}:{device:04x}");
         }
         for id in 0..=u16::MAX {
-            if super::super::intel::identity::device(id).is_some() {
+            if super::super::intel::identity::device(id).is_some()
+                || super::super::intel::gen1::device(id).is_some()
+            {
                 assert_eq!(reason(0x8086, id), None, "{id:04x}");
             }
         }
         for (vendor, device, driver) in [
-            (0x8086, 0x9df0, "iwlwifi"),
-            (0x8086, 0x24fd, "iwlwifi"),
+            (0x8086, 0xa370, "iwlwifi"),
+            (0x8086, 0x24f3, "iwlwifi"),
             (0x14c3, 0x7961, "mt7921e"),
             (0x0b48, 0x7922, "mt7921e"),
             (0x14c3, 0x7990, "mt7996e"),

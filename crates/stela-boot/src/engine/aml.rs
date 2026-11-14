@@ -870,6 +870,8 @@ pub struct HostAcpi {
     installed_ec: RefCell<Option<stela_drivers::platform::ec::capability::Installed<'static>>>,
     power: RefCell<stela_drivers::probe::Power>,
     notification: RefCell<Option<stela_drivers::platform::acpi::Notification<'static>>>,
+    /// The panel outputs whose brightness notifications step the backlight.
+    brightness: RefCell<Vec<stela_drivers::platform::acpi::Notification<'static>>>,
     ec_pending: Cell<bool>,
     hardware: AtomicBool,
     ec_failed: AtomicBool,
@@ -1054,6 +1056,7 @@ impl HostAcpi {
             installed_ec: RefCell::new(None),
             power: RefCell::new(Default::default()),
             notification: RefCell::new(None),
+            brightness: RefCell::new(Vec::new()),
             ec_pending: Cell::new(false),
             hardware: AtomicBool::new(false),
             ec_failed: AtomicBool::new(false),
@@ -1107,6 +1110,7 @@ impl HostAcpi {
                             output::arguments(format_args!("HOST ACPI notify refused: {error:?}\n"))
                         }
                     }
+                    host.install_brightness_keys();
                     if let Err(error) = host.session.update_all_gpes() {
                         output::arguments(format_args!(
                             "HOST ACPI GPE update refused: {error:?}\n"
@@ -1126,6 +1130,57 @@ impl HostAcpi {
             ));
         }
         Some(host)
+    }
+
+    /// `acpi_video`'s part for a native backlight: each display output with
+    /// `_BCM` reports its brightness keys to `backlight`, and its adapter's
+    /// `_DOS(4)` tells the firmware to only notify, not change the
+    /// brightness itself (`acpi_video_bus_DOS` on a Windows 8 or later
+    /// firmware). Without a backlight Stela can step, the firmware keeps
+    /// its own handling.
+    fn install_brightness_keys(&'static self) {
+        if !super::backlight::available() {
+            return;
+        }
+        let Ok(devices) = self.session.all_devices() else {
+            return;
+        };
+        let mut adapters = Vec::new();
+        for output in devices
+            .into_iter()
+            .filter(|device| device.child("_BCM").is_ok())
+        {
+            match output.notify(super::backlight::notified) {
+                Ok(notification) => self.brightness.borrow_mut().push(notification),
+                Err(error) => {
+                    output::arguments(format_args!(
+                        "HOST ACPI brightness keys refused: {error:?}\n"
+                    ));
+                    continue;
+                }
+            }
+            if let Ok(path) = output.path()
+                && let Some((adapter, _)) = path.rsplit_once('.')
+                && !adapters.iter().any(|known: &String| known == adapter)
+            {
+                adapters.push(adapter.into());
+            }
+        }
+        for adapter in &adapters {
+            if let Ok(adapter) = self.session.handle(adapter)
+                && adapter.child("_DOS").is_ok()
+                && let Err(error) = adapter.invoke(
+                    Some("_DOS"),
+                    &[stela_drivers::platform::acpi::Argument::Integer(4)],
+                )
+            {
+                output::arguments(format_args!("HOST ACPI _DOS refused: {error:?}\n"));
+            }
+        }
+        output::arguments(format_args!(
+            "HOST ACPI brightness keys: {} outputs\n",
+            self.brightness.borrow().len()
+        ));
     }
 
     pub(super) fn embedded_controller(

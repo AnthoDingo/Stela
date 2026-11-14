@@ -209,7 +209,7 @@ fn a_wifi_network_requires_the_database_and_a_mediatek_chips_two_images() {
         (0x10ec, 0x8168),
         (0x14c3, 0x7663),
         (0x8086, 0x2526),
-        (0x8086, 0x24fd),
+        (0x8086, 0x24f3),
         (0x10ec, 0xb852),
         (0x10ec, 0xb822),
         (0x17cb, 0x1103),
@@ -278,6 +278,8 @@ fn a_wifi_network_requires_every_image_an_intel_device_can_select() {
             &["iwlwifi-bz-b0-fm-c0-c106.ucode", "iwlwifi-bz-b0-fm-c0.pnvm"][..],
         ),
         (0xe440, &["iwlwifi-sc-a0-fm-c0-c106.ucode"][..]),
+        (0x24fd, &["iwlwifi-8265-36.ucode"][..]),
+        (0x9df0, &["iwlwifi-9000-pu-b0-jf-b0-46.ucode"][..]),
     ] {
         let mut inventory = Inventory::default();
         assert!(require_wifi(&mut inventory, 0x8086, device).unwrap());
@@ -310,5 +312,5 @@ fn a_wifi_network_requires_every_image_an_intel_device_can_select() {
             Plan::select(&inventory).unwrap();
         }
     }
-    assert_eq!(listed, 26);
+    assert_eq!(listed, 28);
 }

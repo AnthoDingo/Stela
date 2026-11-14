@@ -11,3 +11,15 @@
 /GOAL.md
 /docs/
 /AGENTS.md
+
+# PR #50 learning vault
+agents/
+AGENT.MD
+
+# graphify: each developer builds the graph locally (graph.json is over
+# GitHub's 100 MB file limit, and the cache and interpreter paths are
+# per machine). Only the readable report and its interactive page are
+# shared.
+**/graphify-out/*
+!/graphify-out/GRAPH_REPORT.md
+!/graphify-out/graph.html

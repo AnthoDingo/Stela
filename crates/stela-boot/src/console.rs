@@ -137,6 +137,9 @@ pub struct Framebuffer {
     /// video memory shows, the one at `base` or the one after it, when the
     /// display has them (a virtual display's Bochs DISPI registers).
     pub(crate) flip: Option<usize>,
+    /// The address of the panel backlight's BLC_PWM_PCH_CTL1, when the
+    /// screen is a Skylake or Kaby Lake laptop's (`engine::backlight`).
+    pub(crate) backlight: Option<usize>,
     pub(crate) pci_source: Option<crate::pci_io::FramebufferSource>,
 }
 
@@ -187,6 +190,14 @@ impl Framebuffer {
                 "DISPLAY presents into a hidden second frame and flips to it\n"
             ));
         }
+        if let Some((registers, ctl2)) = crate::pci_io::intel_backlight(handle) {
+            screen.backlight = Some(registers as usize);
+            crate::output::arguments(format_args!(
+                "DISPLAY panel backlight: PWM period {} duty {}\n",
+                stela_boot_core::backlight::period(ctl2),
+                stela_boot_core::backlight::duty(ctl2)
+            ));
+        }
         Ok(Some(screen))
     }
 
@@ -207,6 +218,7 @@ impl Framebuffer {
             refresh_millihertz: mode::refresh(width, height),
             size_mm: mode::size_mm(),
             flip: None,
+            backlight: None,
             pci_source: None,
         };
         (framebuffer.stride * framebuffer.height * BYTES_PER_PIXEL <= framebuffer.bytes)
@@ -227,6 +239,7 @@ impl Framebuffer {
             refresh_millihertz: stela_soc::scanout::DEFAULT_REFRESH_MILLIHERTZ,
             size_mm: None,
             flip: None,
+            backlight: None,
             pci_source: None,
         }
     }
@@ -238,6 +251,9 @@ impl Framebuffer {
             base,
             flip: self
                 .flip
+                .map(|registers| registers.wrapping_add(base.wrapping_sub(self.base))),
+            backlight: self
+                .backlight
                 .map(|registers| registers.wrapping_add(base.wrapping_sub(self.base))),
             ..self
         }

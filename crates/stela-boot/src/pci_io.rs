@@ -327,6 +327,52 @@ pub(crate) fn bochs_display_flip(
     fits.then_some(registers.start + DISPI_REGISTERS)
 }
 
+/// The graphics function's MMIO BAR (GTTMMADR), which holds the south
+/// display engine's registers.
+const GRAPHICS_MMIO_BAR: u8 = 0;
+
+/// The panel backlight of the Skylake or Kaby Lake graphics on GOP `handle`
+/// (`stela_boot_core::backlight`): the physical address of its
+/// BLC_PWM_PCH_CTL1, and the CTL2 value firmware left, when its PWM runs
+/// with a period Stela can step. `None` for another device or layout.
+pub(crate) fn intel_backlight(handle: Handle) -> Option<(u64, u32)> {
+    use stela_boot_core::backlight;
+    let mut pci = gop_pci(handle)?;
+    let header = pci.read_header().ok()?;
+    let vendor = u16::from_le_bytes([header[0], header[1]]);
+    let device = u16::from_le_bytes([header[2], header[3]]);
+    if header[0x0b] != 3 || !backlight::graphics(vendor, device) {
+        return None;
+    }
+    let regions = pci.bar_regions(GRAPHICS_MMIO_BAR).ok()?;
+    let [region] = regions.as_slice() else {
+        return None;
+    };
+    let end = backlight::CTL1 + backlight::CTL2_FROM_CTL1 as u64 + 4;
+    if region.host.end - region.host.start < end {
+        return None;
+    }
+    let mut register = |offset: u64| {
+        let mut value = 0u32;
+        // SAFETY: live boot protocol; EfiPciIoWidthUint32 (2) reads one
+        // register of the BAR into the local.
+        let read = unsafe {
+            (pci.mem_read)(
+                &mut *pci,
+                2,
+                GRAPHICS_MMIO_BAR,
+                offset,
+                1,
+                ptr::from_mut(&mut value).cast(),
+            )
+        };
+        read.is_success().then_some(value)
+    };
+    let ctl1 = register(backlight::CTL1)?;
+    let ctl2 = register(backlight::CTL1 + backlight::CTL2_FROM_CTL1 as u64)?;
+    backlight::usable(ctl1, ctl2).then_some((region.host.start + backlight::CTL1, ctl2))
+}
+
 fn status(value: Status) -> Result<(), Error> {
     if value.is_success() {
         Ok(())
