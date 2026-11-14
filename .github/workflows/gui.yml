@@ -1,0 +1,99 @@
+# stela-gui, the window over stela's commands, which links the stela-cli
+# library: lint, test and build it on Linux, Windows and macOS, and keep
+# each build as an artifact. Like ci.yml it builds without a stela.efi
+# (STELA_EFI unset): `create` and `update` need the release's builds.
+name: gui
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gui-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  build:
+    name: build (${{ matrix.system }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - system: linux
+            os: ubuntu-22.04
+            binary: stela-gui
+          - system: windows
+            os: windows-2025
+            binary: stela-gui.exe
+          - system: macos
+            os: macos-26
+            binary: stela-gui
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # No later step pushes, and a pull request's code runs here.
+          persist-credentials: false
+
+      - name: Put LLVM on PATH
+        run: |
+          # stela-tls compiles Mbed TLS with clang, as in ci.yml.
+          case "$RUNNER_OS" in
+            Windows) echo 'C:\Program Files\LLVM\bin' >> "$GITHUB_PATH" ;;
+            Linux)
+              curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc >/dev/null
+              release="$(lsb_release -cs)"
+              echo "deb http://apt.llvm.org/$release/ llvm-toolchain-$release-21 main" | sudo tee /etc/apt/sources.list.d/llvm-21.list
+              sudo apt-get update -q
+              sudo apt-get install -y -q --no-install-recommends clang-21 llvm-21
+              echo /usr/lib/llvm-21/bin >> "$GITHUB_PATH"
+              ;;
+          esac
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.rustup/toolchains
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-gui-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+          restore-keys: cargo-gui-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install
+          rustc --version
+          clang --version | head -1
+
+      - name: Clippy
+        run: cargo clippy --locked -p stela-gui --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --locked -p stela-gui
+
+      - name: Build
+        run: |
+          cargo build --release --locked -p stela-gui
+          ls -l "target/release/${{ matrix.binary }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stela-gui-${{ matrix.system }}
+          path: target/release/${{ matrix.binary }}
+          if-no-files-found: error
+          retention-days: 14

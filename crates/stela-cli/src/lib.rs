@@ -16,7 +16,7 @@ mod progress;
 pub mod restore;
 mod setup;
 
-pub use setup::InstallMedium;
+pub use setup::{InstallMedium, embed};
 
 /// The help's examples, with this computer's spelling of a whole disk.
 fn examples() -> String {
