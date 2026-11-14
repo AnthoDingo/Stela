@@ -61,6 +61,7 @@ mod create;
 mod doctor;
 mod ecid;
 mod elevation;
+pub mod embed;
 mod fdr;
 mod firmware;
 mod format;
@@ -438,6 +439,9 @@ pub(crate) struct Request {
     /// `--yes`: without a terminal, accept what a terminal run asks about,
     /// erasing aside.
     pub(crate) yes: bool,
+    /// Run inside another program (`stela-gui`), which cannot be relaunched
+    /// with more rights in its place: a command that needs them stops.
+    pub(crate) embedded: bool,
     target: Option<String>,
     nor: Option<String>,
     disk_serial: Option<String>,
@@ -871,6 +875,10 @@ impl Request {
         });
         match rights {
             elevation::Rights::Enough => {}
+            elevation::Rights::Relaunch if self.embedded => bail!(
+                "this command needs administrator rights: start Stela as administrator, or choose \
+                 a dry run. Nothing was downloaded or changed."
+            ),
             elevation::Rights::Relaunch => {
                 elevation::relaunch()?;
                 if boot_log {

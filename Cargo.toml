@@ -3,6 +3,7 @@ members = [
     "crates/stela-boot-core",
     "crates/stela-crypto",
     "crates/stela-cli",
+    "crates/stela-gui",
     "crates/stela-gpu-maintenance",
     "crates/stela-dev",
     "crates/stela-loader",
@@ -27,7 +28,8 @@ members = [
     "crates/stela-tls",
     "xtask",
 ]
-# A plain `cargo build` builds the shipped crates. `stela-dev` (research and
+# A plain `cargo build` builds the shipped crates. `stela-gui` (a window
+# over `stela`), `stela-dev` (research and
 # development commands) and `xtask` (development tasks, whose AArch64
 # fixtures need clang) build with `-p` or `--workspace`, as `cargo xtask
 # check` does.
