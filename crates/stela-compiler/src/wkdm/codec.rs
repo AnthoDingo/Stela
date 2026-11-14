@@ -99,6 +99,7 @@ fn words(bytes: &[u8]) -> impl Iterator<Item = u32> + '_ {
 }
 
 /// The words of the index and low-bit sections a page can need.
+#[cfg(test)]
 const INDEX_WORDS: usize = PAGE_WORDS / INDICES_PER_WORD;
 const LOW_WORDS: usize = PAGE_WORDS.div_ceil(LOW_PER_WORD);
 /// The most words a compressible page's data can take.
@@ -147,11 +148,18 @@ fn zero_group(words: &[[u8; WORD_BYTES]; TAGS_PER_WORD]) -> bool {
         == 0
 }
 
-/// One pass over the page into `out`, with no allocation: tags pack
-/// straight into their words, whole words go to their final place, and
-/// indices and low bits pack into fixed buffers. A group of 16 zero words
-/// is skipped whole: its tag word is zero and it changes nothing else. The
-/// size only grows, so the pass stops once the page cannot fit.
+/// One pass over the page into `out`, with no allocation. A group of 16
+/// zero words is skipped whole: its tag word is zero and it changes nothing
+/// else. The size only grows, so the pass stops once a group leaves the
+/// page unable to fit.
+///
+/// As [`decompress_into`] does, no branch depends on a word's tag, which
+/// takes a third less time on mixed pages (`encode_costs_over_distinct_pages`)
+/// and a little more on pages whose tags a branch predicts. Every word
+/// stores its entry, low bits and whole word at their kind's next position,
+/// and only the counters of its kind advance, so the next word overwrites
+/// what it did not keep. Indices and low bits pack into their words after
+/// the pass. Bytes past the returned length are unspecified.
 pub fn compress_into(page: &[u8; PAGE_BYTES], out: &mut [u8; COMPRESS_BUFFER_BYTES]) -> Encoded {
     let (input, _) = page.as_chunks::<WORD_BYTES>();
     let first = input[0];
@@ -159,47 +167,54 @@ pub fn compress_into(page: &[u8; PAGE_BYTES], out: &mut [u8; COMPRESS_BUFFER_BYT
         return Encoded::SingleValue;
     }
     let (stream, _) = out.as_chunks_mut::<WORD_BYTES>();
-    let mut tags = [0u32; TAG_WORDS];
-    let mut indices = [0u32; INDEX_WORDS];
-    let mut low = [0u32; LOW_WORDS];
-    let mut dictionary = [0u32; DICTIONARY_ENTRIES];
+    // In page order: the indexed words' entries and the partial words' low
+    // bits, each section padded to whole words.
+    let mut entries = [0u8; PAGE_WORDS];
+    let mut lows = [0u16; LOW_WORDS * LOW_PER_WORD];
+    // A zero word (whose entry is 0) writes a spare entry past the 16, so
+    // the dictionary store waits on no load.
+    let mut dictionary = [0u32; 2 * DICTIONARY_ENTRIES];
     let (mut whole, mut indexed, mut partial) = (0usize, 0usize, 0usize);
     let (groups, _) = input.as_chunks::<TAGS_PER_WORD>();
     for (group, words) in groups.iter().enumerate() {
         if zero_group(words) {
+            stream[HEADER_WORDS + group] = [0; WORD_BYTES];
             continue;
         }
-        let mut tag_word = 0u32;
-        for (slot, bytes) in words.iter().enumerate() {
+        let mut tags = [0u8; TAGS_PER_WORD];
+        for (tag, bytes) in tags.iter_mut().zip(words) {
             let word = u32::from_le_bytes(*bytes);
-            if word == 0 {
-                continue;
-            }
             let entry = index(word);
             let current = dictionary[entry];
-            dictionary[entry] = word;
-            let tag = if current == word {
-                indices[indexed / INDICES_PER_WORD] |= (entry as u32) << index_shift(indexed);
-                indexed += 1;
-                Tag::Exact
-            } else if current >> LOW_BITS == word >> LOW_BITS {
-                indices[indexed / INDICES_PER_WORD] |= (entry as u32) << index_shift(indexed);
-                indexed += 1;
-                low[partial / LOW_PER_WORD] |= (word & LOW_MASK) << low_shift(partial);
-                partial += 1;
-                Tag::Partial
-            } else {
-                let at = WHOLE_START + whole;
-                if at >= MAX_STREAM_WORDS {
-                    return Encoded::Incompressible;
-                }
-                stream[at] = word.to_le_bytes();
-                whole += 1;
-                Tag::Whole
-            };
-            tag_word |= (tag as u32) << tag_shift(slot);
+            // Each 0 or 1. A zero word is none of them.
+            let nonzero = usize::from(word != 0);
+            let is_indexed = nonzero & usize::from((current ^ word) >> LOW_BITS == 0);
+            let is_exact = is_indexed & usize::from(current == word);
+            let is_partial = is_indexed ^ is_exact;
+            let is_whole = nonzero ^ is_indexed;
+            // Exact 3, partial 1, whole 2, zero 0.
+            *tag = (is_indexed | (is_exact | is_whole) << 1) as u8;
+            dictionary[entry + (nonzero ^ 1) * DICTIONARY_ENTRIES] = word;
+            // Both counts are below a page's words here; the masks only
+            // show it to the bounds checks.
+            entries[indexed % PAGE_WORDS] = entry as u8;
+            indexed += is_indexed;
+            lows[partial % PAGE_WORDS] = (word & LOW_MASK) as u16;
+            partial += is_partial;
+            // The buffer's spare word takes whole words past the limit
+            // until the group's check below gives up.
+            stream[(WHOLE_START + whole).min(MAX_STREAM_WORDS)] = word.to_le_bytes();
+            whole += is_whole;
         }
-        tags[group] = tag_word;
+        // Tag `4j + k` at bit `8k + 2j`.
+        let (quads, _) = tags.as_chunks::<4>();
+        let tag_word = (0..4).fold(0, |packed, j| {
+            packed | u32::from_le_bytes(quads[j]) << (2 * j)
+        });
+        stream[HEADER_WORDS + group] = tag_word.to_le_bytes();
+        if WHOLE_START + whole > MAX_STREAM_WORDS {
+            return Encoded::Incompressible;
+        }
     }
     let indices_start = WHOLE_START + whole;
     let index_words = indexed.div_ceil(INDICES_PER_WORD);
@@ -213,14 +228,19 @@ pub fn compress_into(page: &[u8; PAGE_BYTES], out: &mut [u8; COMPRESS_BUFFER_BYT
     stream[0] = (indices_start as u32).to_le_bytes();
     stream[1] = (low_start as u32).to_le_bytes();
     stream[2] = (end as u32).to_le_bytes();
-    for (to, word) in stream[HEADER_WORDS..WHOLE_START].iter_mut().zip(tags) {
-        *to = word.to_le_bytes();
+    // The positions past each count hold at most the last word's unkept store.
+    entries[indexed..index_words * INDICES_PER_WORD].fill(0);
+    lows[partial..low_words * LOW_PER_WORD].fill(0);
+    // Index `4h + k` at bit `8k + 4h`.
+    let (octets, _) = entries.as_chunks::<INDICES_PER_WORD>();
+    for (to, octet) in stream[indices_start..low_start].iter_mut().zip(octets) {
+        let pair = u64::from_le_bytes(*octet);
+        *to = (pair as u32 | ((pair >> 32) as u32) << 4).to_le_bytes();
     }
-    for (to, word) in stream[indices_start..low_start].iter_mut().zip(indices) {
-        *to = word.to_le_bytes();
-    }
-    for (to, word) in stream[low_start..end].iter_mut().zip(low) {
-        *to = word.to_le_bytes();
+    let (triples, _) = lows.as_chunks::<LOW_PER_WORD>();
+    for (to, [a, b, c]) in stream[low_start..end].iter_mut().zip(triples) {
+        *to = (u32::from(*a) | u32::from(*b) << LOW_BITS | u32::from(*c) << (2 * LOW_BITS))
+            .to_le_bytes();
     }
     stream[end..bytes / WORD_BYTES].fill([0; WORD_BYTES]);
     Encoded::Data(bytes)
@@ -825,6 +845,30 @@ mod tests {
             "WKdm decode ns/page: distinct {distinct}, one page repeated {repeated} \
              ({} pages, {bytes} bytes each)",
             data.len()
+        );
+    }
+
+    /// Encode cost over pages that differ, each once a round, as
+    /// [`decode_costs_over_distinct_pages`] measures decoding.
+    #[test]
+    #[ignore = "manual: opt-in"]
+    fn encode_costs_over_distinct_pages() {
+        let pages: Vec<_> = (1..=256).map(mixed_page).collect();
+        let mut out = Box::new([0u8; COMPRESS_BUFFER_BYTES]);
+        let mut time = |pages: &[Box<[u8; PAGE_BYTES]>], rounds: usize| {
+            let start = std::time::Instant::now();
+            for _ in 0..rounds {
+                for page in pages {
+                    core::hint::black_box(compress_into(core::hint::black_box(page), &mut out));
+                }
+            }
+            start.elapsed().as_nanos() / (rounds * pages.len()) as u128
+        };
+        let distinct = time(&pages, 20);
+        let repeated = time(&pages[..1], 20 * pages.len());
+        std::println!(
+            "WKdm encode ns/page: distinct {distinct}, one page repeated {repeated} ({} pages)",
+            pages.len()
         );
     }
 
