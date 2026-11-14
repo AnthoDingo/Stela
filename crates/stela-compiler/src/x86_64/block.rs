@@ -494,8 +494,10 @@ fn emit_selected(
     let mut fault_recovery = vec![];
     let source_rows = instructions.len() + usize::from(terminal.is_some());
     let mut block = super::Emitted {
+        // With room for a typical block's code: the derived default starts
+        // empty and grows by doubling as the block emits.
+        x86_64_code: Code::new(),
         source_map: Vec::with_capacity(source_rows),
-        ..super::Emitted::default()
     };
     let code = &mut block.x86_64_code;
     code.set_pinned(pinned);

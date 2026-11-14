@@ -258,6 +258,9 @@ pub(super) fn parse_with(
     parse_admitted(source, base, profile, native, |_| true)
 }
 
+/// The instructions a parse starts with room for: most blocks have fewer.
+const PARSE_CAPACITY: usize = 16;
+
 pub(super) fn parse_admitted(
     source: &[u8],
     base: GuestAddress,
@@ -288,7 +291,9 @@ pub(super) fn parse_admitted(
             },
         });
     }
-    let mut instructions = Vec::new();
+    // Room for most blocks' instructions in one allocation, rather than
+    // growing from 4 by doubling.
+    let mut instructions = Vec::with_capacity((source.len() / 4).min(PARSE_CAPACITY));
     let mut terminal = None;
     let mut source_bytes = 0;
     let mut side_exits = 0;

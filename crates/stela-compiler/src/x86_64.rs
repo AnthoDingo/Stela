@@ -77,7 +77,10 @@ pub(crate) struct Emitted {
 
 impl Emitted {
     pub(crate) fn into_native(self) -> crate::NativeBlock {
-        let (x86_64_code, relocations) = self.x86_64_code.into_parts();
+        let (mut x86_64_code, relocations) = self.x86_64_code.into_parts();
+        // Engines keep a block's code for its recovery: not the room
+        // emission started with ([`asm::Code::new`]).
+        x86_64_code.shrink_to_fit();
         crate::NativeBlock {
             x86_64_code,
             source_map: self.source_map,

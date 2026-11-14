@@ -878,9 +878,22 @@ fn compile_bench() {
         let pc = base + at as u64;
         let page_end = (at as u64 | (FETCH_PAGE - 1)) + 1;
         let end = (page_end as usize).min(image.len()).min(at + window(pc));
+        // As the engine compiles: the first window, then the whole one
+        // when the block may run past it.
         let mut source = image[at..end].to_vec();
-        preparation.admit(&mut source);
-        match preparation.prepare(&source, pc, source.len()) {
+        let first = source.len().min(FIRST_WINDOW_BYTES);
+        preparation.admit(&mut source[..first]);
+        let probe = match first == source.len() {
+            true => None,
+            false => preparation
+                .prepare_window(&source[..first], pc, first, false)
+                .filter(Result::is_ok),
+        };
+        let prepared = probe.unwrap_or_else(|| {
+            preparation.admit(&mut source[first..]);
+            preparation.prepare(&source, pc, source.len())
+        });
+        match prepared {
             Ok(Prepared::Block {
                 compiled, input, ..
             }) => {
