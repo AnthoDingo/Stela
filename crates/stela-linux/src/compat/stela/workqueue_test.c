@@ -375,7 +375,10 @@ void stela_linux_workqueue_test_main(void)
 	assert(!request_irq(7, other_handler, IRQF_SHARED, "other", &forced));
 	assert(line_enables == 1);
 	stela_linux_irq_run(7);
-	flush_workqueue(system_highpri_wq);
+	/* The primary handlers have returned; the queued thread has not. */
+	assert(!synchronize_hardirq(7));
+	synchronize_irq(7);
+	assert(synchronize_hardirq(7));
 	assert(hard_runs == 1 && other_runs == 1 && thread_runs == 1);
 	assert(line_disables == 1 && line_enables == 2);
 	assert(!strcmp(free_irq(7, &hard_runs), "threaded") && line_disables == 1);

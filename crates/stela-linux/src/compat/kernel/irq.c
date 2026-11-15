@@ -277,6 +277,35 @@ const void *free_irq(unsigned int irq, void *dev_id)
 	return name;
 }
 
+/* Primary handlers run in stela_linux_irq_run, on the owner's serialized
+ * service, never inside the caller's own code: none is in progress here.
+ * Whether a threaded handler is still queued or running is what is left. */
+bool synchronize_hardirq(unsigned int irq)
+{
+	struct requested *request;
+
+	list_for_each_entry(request, &requests, node)
+		if (request->action.irq == irq && READ_ONCE(request->thread_active))
+			return false;
+	return true;
+}
+
+/* Waits for the line's threaded handlers, which run as work. */
+void synchronize_irq(unsigned int irq)
+{
+	struct irq_line *line = line_owner(irq, false);
+	struct requested *request;
+
+	might_sleep();
+	if (!line)
+		return;
+	mutex_lock(&line->request_mutex);
+	list_for_each_entry(request, &requests, node)
+		if (request->action.irq == irq)
+			flush_work(&request->thread);
+	mutex_unlock(&line->request_mutex);
+}
+
 void stela_linux_irq_run(unsigned int irq)
 {
 	struct stela_linux_atomic_callback scope;
