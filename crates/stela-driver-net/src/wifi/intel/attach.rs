@@ -69,14 +69,15 @@ pub enum AttachError {
     },
     Step(String),
     Boot(boot::Error),
-    /// An 8000- or 9000-family function, identified and its image staged.
-    /// An 8000-family one also ran its INIT image to `alive` and was stopped
-    /// again: what follows ALIVE (NVM, calibration, the RT image) is not
-    /// ported, nor is the 9000 family's transport.
+    /// An 8000- or 9000-family function that ran its INIT image to
+    /// INIT_COMPLETE, then its runtime image up to DQA (`alive` is the
+    /// runtime image's), and was stopped again: queues, stations and scans
+    /// are not ported.
     Gen1Transport {
         family: gen1::Family,
         firmware: &'static str,
-        alive: Option<gen1::boot::Alive>,
+        alive: gen1::boot::Alive,
+        init: gen1::init::Init,
     },
 }
 
@@ -89,18 +90,21 @@ impl fmt::Display for AttachError {
             Self::Gen1Transport {
                 family,
                 firmware,
-                alive: Some(alive),
-            } => write!(
-                f,
-                "{family:?}: {firmware} INIT image ALIVE (version {}.{:08x}, scheduler at {:#x});                  the boot after ALIVE is not ported",
-                alive.ucode_major, alive.ucode_minor, alive.scheduler_base
-            ),
-            Self::Gen1Transport {
-                family, firmware, ..
-            } => write!(
-                f,
-                "{family:?} family identified and {firmware} staged; its gen1 transport is not ported"
-            ),
+                alive,
+                init,
+            } => {
+                let [a, b, c, d, e, g] = init.hardware_address;
+                write!(
+                    f,
+                    "{family:?}: {firmware} runtime image up (version {}.{:08x}, address \
+                     {a:02x}:{b:02x}:{c:02x}:{d:02x}:{e:02x}:{g:02x}, {} NVM sections, {} PHY DB \
+                     sections); queues, stations and scans are not ported",
+                    alive.ucode_major,
+                    alive.ucode_minor,
+                    init.nvm.len(),
+                    init.phy_db.len()
+                )
+            }
             error => write!(f, "{error:?}"),
         }
     }
@@ -144,22 +148,24 @@ pub unsafe fn attach<Q: BootIo, B: BiosIo>(
             silicon: Silicon::default(),
         })
         .map_err(AttachError::Identity)?;
-        let staged = profile.stage(inputs.firmware).map_err(staging)?;
         let (family, firmware) = (profile.family(), profile.firmware_name());
-        let alive = match family {
-            // SAFETY: the caller's contract is the gen1 boot's.
-            gen1::Family::F8000 => Some(
-                unsafe { gen1::boot::init_alive(io, profile, staged, inputs.pages, domain) }
-                    .map_err(AttachError::Boot)?,
-            ),
-            // The 9000 family's multi-queue RX is not ported: nothing is
-            // woken or written.
-            gen1::Family::F9000 => None,
-        };
+        let staged = profile.stage(inputs.firmware).map_err(staging)?;
+        // SAFETY: the caller's contract is the gen1 boot's, for each image.
+        let (_, init, io) =
+            unsafe { gen1::init::run(io, profile.clone(), staged, inputs.pages, domain.clone()) }
+                .map_err(AttachError::Boot)?;
+        let staged = profile.stage(inputs.firmware).map_err(staging)?;
+        // SAFETY: as for INIT; its stop handed the function back.
+        let (mut boot, runtime) =
+            unsafe { gen1::runtime::start(io, profile, staged, &init, inputs.pages, domain) }
+                .map_err(AttachError::Boot)?;
+        // Nothing past DQA is ported: the runtime image stops again.
+        boot.stop().map_err(AttachError::Boot)?;
         return Err(AttachError::Gen1Transport {
             family,
             firmware,
-            alive,
+            alive: runtime.alive,
+            init,
         });
     }
     let (family, _) =

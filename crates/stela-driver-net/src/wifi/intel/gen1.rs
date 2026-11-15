@@ -18,6 +18,8 @@ use super::{
 use crate::firmware as resources;
 
 pub mod boot;
+pub mod init;
+pub mod runtime;
 
 const INTEL: u16 = 0x8086;
 const WIRELESS_8265: u16 = 0x24fd;
