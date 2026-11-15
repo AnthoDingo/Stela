@@ -69,6 +69,7 @@ const DRM_SOURCES: &[&str] = &[
     "drm_mode_object",
     "drm_modes",
     "drm_modeset_lock",
+    "drm_panel",
     "drm_panel_orientation_quirks",
     "drm_pci",
     "drm_plane",
@@ -120,6 +121,7 @@ const DRM_SOURCES: &[&str] = &[
     "display/drm_dp_dual_mode_helper",
     "display/drm_dp_helper",
     "display/drm_dp_mst_topology",
+    "display/drm_hdcp_helper",
     "display/drm_hdmi_helper",
     "display/drm_scdc_helper",
 ];

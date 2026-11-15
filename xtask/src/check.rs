@@ -98,6 +98,7 @@ pub fn run(fix: bool, low_memory: bool) -> Result<()> {
             "--features",
             "metal-linked,nouveau-port",
         ]),
+        uefi(["-p", "stela-driver-gpu", "--features", "i915-port"]),
     ];
     let mut nvk_clippy = uefi([BOOT[0], BOOT[1], "--features", "nvk"]);
     // Mesa's unchanged path crates declare their upstream naming lint

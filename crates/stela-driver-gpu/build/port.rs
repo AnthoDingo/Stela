@@ -216,7 +216,9 @@ fn members(archive: &Path) -> Vec<Member> {
                 let Ok(name) = symbol.name() else {
                     continue;
                 };
-                if symbol.is_undefined() {
+                // A weak reference links to nothing when nothing defines it,
+                // as `symbol_get` without modules relies on (i915's IPS link).
+                if symbol.is_undefined() && !symbol.is_weak() {
                     imported.insert(name.to_owned());
                 } else if symbol.is_global() {
                     defined.insert(name.to_owned());

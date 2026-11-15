@@ -69,9 +69,16 @@
 #define CONFIG_DRM_DISPLAY_HDMI_HELPER 1
 #define CONFIG_DMA_SHARED_BUFFER 1
 #define CONFIG_SYNC_FILE 1
+/* i915, for graphics version 9; only i915's own sources read it. Its Kconfig
+ * entry's selects stay off until a helper i915 calls needs one. */
+#define CONFIG_DRM_I915 1
+/* What i915 selects that version 9 reaches: HDCP 1.4/2.2 and the eDP panel. */
+#define CONFIG_DRM_DISPLAY_HDCP_HELPER 1
+#define CONFIG_DRM_PANEL 1
 
 /* The drivers' parameter and scheduling defaults, as Linux's Kconfig sets them. */
 #define CONFIG_DRM_XE_FORCE_PROBE ""
+#define CONFIG_DRM_I915_FORCE_PROBE ""
 #define CONFIG_DRM_I915_REQUEST_TIMEOUT 20000
 #define CONFIG_DRM_I915_FENCE_TIMEOUT 10000
 #define CONFIG_DRM_I915_USERFAULT_AUTOSUSPEND 250

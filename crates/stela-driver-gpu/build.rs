@@ -1,3 +1,8 @@
+#[cfg(all(feature = "nouveau-port", feature = "i915-port"))]
+compile_error!("an image carries one DRM driver: `nouveau-port` or `i915-port`");
+#[cfg(feature = "i915-port")]
+#[path = "build/i915.rs"]
+mod i915;
 #[cfg(feature = "nouveau-port")]
 #[path = "build/kbuild.rs"]
 mod kbuild;
@@ -37,6 +42,8 @@ fn main() {
     let mut linux = linux;
     #[cfg(feature = "nouveau-port")]
     nouveau::port(&mut linux);
+    #[cfg(feature = "i915-port")]
+    i915::port(&mut linux);
     #[cfg(feature = "linux-kernel")]
     tests.write();
 }

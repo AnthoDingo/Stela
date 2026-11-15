@@ -1,10 +1,15 @@
-# nouveau, shared DRM helpers, ACPICA and kernel headers; not a
+# nouveau, i915, shared DRM helpers, ACPICA and kernel headers; not a
 # buildable kernel tree. netfilter's headers differ only in case, which a
 # case-insensitive file system cannot check out.
 /drivers/acpi/acpica/
 /drivers/base/map.c
 /drivers/base/property.c
 /drivers/gpu/drm/nouveau/
+# i915 without its virtualization host (GVT), which Stela does not build.
+/drivers/gpu/drm/i915/
+!/drivers/gpu/drm/i915/gvt/
+# The IPS interface i915 exports to intel_ips (gt/intel_rps.c).
+/drivers/platform/x86/intel_ips.h
 /drivers/gpu/drm/display/
 /drivers/gpu/drm/ttm/
 /drivers/gpu/drm/scheduler/

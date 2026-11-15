@@ -24,6 +24,9 @@ drm-port = ["linux-kernel", "stela-c-build/linux-registry"]
 # nouveau's hardware resource manager (NVKM), compiled unchanged; it reaches
 # no device until the kernel services it imports are supplied.
 nouveau-port = ["drm-port"]
+# i915 for graphics version 9, compiled unchanged. An image carries one DRM
+# driver: this excludes `nouveau-port`.
+i915-port = ["drm-port"]
 # Stela's Metal device over the internal Vulkan boundary; no Vulkan driver.
 metal = ["dep:stela-contracts"]
 # The Metal device's native backend over a loaded Vulkan driver (NVK).
