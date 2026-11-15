@@ -236,6 +236,7 @@
 /init/version-timestamp.c
 /lib/refcount.c
 /lib/refcount_lock.c
+/lib/dec_and_lock.c
 /lib/rcuref.c
 /lib/flex_proportions.c
 /drivers/dma-buf/Makefile
