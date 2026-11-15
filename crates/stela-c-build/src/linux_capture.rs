@@ -382,7 +382,15 @@ fn prepared(build: &cc::Build, registration: &Path, spec: UnitSpec) -> cc::Build
             group_symbol(spec.scope.group).as_str(),
         )
         .flag("-include")
-        .flag(registration);
+        // One spelling whichever way the caller joined it: a producer's
+        // `Path::join` and a consumer's literal differ on Windows only in
+        // their separators, and profiles compare options as text.
+        .flag(
+            registration
+                .to_str()
+                .expect("compiler options must be UTF-8")
+                .replace('\\', "/"),
+        );
     if !defines(&build, "-DKBUILD_MODNAME=") {
         build
             .define("KBUILD_MODNAME", format!("\"{}\"", unit.module).as_str())
