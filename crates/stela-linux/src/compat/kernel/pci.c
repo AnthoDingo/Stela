@@ -339,6 +339,52 @@ struct pci_dev *pci_get_domain_bus_and_slot(int domain, unsigned int bus, unsign
 	return NULL;
 }
 
+/* The next published function after from whose class is class, holding a
+ * reference, as drivers/pci/search.c's: it drops from's. Only the functions
+ * Stela's owners publish are found; the rest of the bus is theirs. */
+struct pci_dev *pci_get_class(unsigned int class, struct pci_dev *from)
+{
+	struct pci_dev *dev = from ? list_next_entry(from, bus_list) :
+				     list_first_entry(&devices, struct pci_dev, bus_list);
+	struct pci_dev *found = NULL;
+
+	for (; !list_entry_is_head(dev, &devices, bus_list); dev = list_next_entry(dev, bus_list))
+		if (dev->class == class) {
+			found = pci_dev_get(dev);
+			break;
+		}
+	pci_dev_put(from);
+	return found;
+}
+
+/* lib/pci_iomap.c's for a memory BAR: maxlen bytes from offset, or the rest
+ * of the BAR when maxlen is 0. Stela maps no port I/O BAR for Linux code. */
+void __iomem *pci_iomap_range(struct pci_dev *dev, int bar, unsigned long offset,
+			      unsigned long maxlen)
+{
+	resource_size_t start = pci_resource_start(dev, bar);
+	resource_size_t length = pci_resource_len(dev, bar);
+
+	if (length <= offset || !start)
+		return NULL;
+	length -= offset;
+	if (maxlen && length > maxlen)
+		length = maxlen;
+	if (pci_resource_flags(dev, bar) & IORESOURCE_IO) {
+		stela_linux_unsupported("PCI port I/O mappings");
+		return NULL;
+	}
+	if (pci_resource_flags(dev, bar) & IORESOURCE_MEM)
+		return ioremap(start + offset, length);
+	return NULL;
+}
+
+void pci_iounmap(struct pci_dev *dev, void __iomem *addr)
+{
+	(void)dev;
+	iounmap(addr);
+}
+
 /* Enabling, following drivers/pci/pci.c. The owner has powered the function
  * and assigned its resources; this turns on their decoding. */
 int pci_enable_device(struct pci_dev *dev)
@@ -600,7 +646,24 @@ int main(void)
 	assert(pci_get_domain_bus_and_slot(0, 3, PCI_DEVFN(1, 0)) == &dev);
 	pci_dev_put(&dev);
 	assert(!pci_get_domain_bus_and_slot(0, 4, PCI_DEVFN(1, 0)));
+	/* Found by class, its reference dropped when the search goes on. */
+	dev.class = PCI_CLASS_BRIDGE_ISA << 8;
+	unsigned int references = kref_read(&dev.dev.kobj.kref);
+	assert(pci_get_class(PCI_CLASS_BRIDGE_ISA << 8, NULL) == &dev);
+	assert(kref_read(&dev.dev.kobj.kref) == references + 1);
+	assert(!pci_get_class(PCI_CLASS_BRIDGE_ISA << 8, &dev));
+	assert(kref_read(&dev.dev.kobj.kref) == references);
+	assert(!pci_get_class(PCI_CLASS_DISPLAY_VGA << 8, NULL));
 	list_del(&dev.bus_list);
+
+	/* A page from the start of a two-page memory BAR; nothing past its end. */
+	dev.resource[2].start = 0xc0000000;
+	dev.resource[2].end = 0xc0001fff;
+	dev.resource[2].flags = IORESOURCE_MEM;
+	void __iomem *bar = pci_iomap_range(&dev, 2, 0, 0x1000);
+	assert(bar == (void __iomem *)rom_window);
+	pci_iounmap(&dev, bar);
+	assert(!pci_iomap_range(&dev, 2, 0x2000, 0));
 
 	/* Two images of a block each in a window of eight: the size is theirs. */
 	dev.resource[PCI_ROM_RESOURCE].start = 0xc0000000;
