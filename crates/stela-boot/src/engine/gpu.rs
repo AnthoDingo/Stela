@@ -95,6 +95,8 @@ const EINVAL: Errno = -22;
 const ENOMEM: Errno = -12;
 const EOPNOTSUPP: Errno = -95;
 
+/// The PCI vendor of the GPUs nouveau drives.
+const NVIDIA: u16 = 0x10de;
 const MSI_CAPABILITY: u8 = 5;
 #[cfg(feature = "nvk")]
 const PCIE_CAPABILITY: u8 = 0x10;
@@ -958,12 +960,12 @@ fn claim(
     let mut requester = services.prepare_requester(address)?;
     let bus_reset = requester.bus_reset_available();
     let function = requester.function_mut();
-    if (function.vendor, function.device, function.class) != (0x10de, adapter.device, adapter.class)
+    if (function.vendor, function.device, function.class) != (NVIDIA, adapter.device, adapter.class)
     {
         return Err(ServiceError::Refused("the GPU's original identity changed"));
     }
     let translated = services.dma_translated(address);
-    gpu::cold::check_candidate(function, timer.as_ref(), translated, bus_reset)
+    gpu::cold::check_candidate(function, NVIDIA, timer.as_ref(), translated, bus_reset)
         .map_err(|error| cold_refusal(address, error))?;
     let owns_screen = match gop {
         ScreenOwner::Function(source) if source.address == address => {
@@ -1073,10 +1075,11 @@ fn claim(
     }
     crate::host_inventory::text(
         alloc::format!("GPU{line}PCIID"),
-        alloc::format!("10de:{:04x}", adapter.device),
+        alloc::format!("{NVIDIA:04x}:{:04x}", adapter.device),
     );
     let mut cold = gpu::cold::Cold::new(gpu::cold::Inputs {
         requester,
+        vendor: NVIDIA,
         views: GpuViews {
             config,
             pci_words,

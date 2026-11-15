@@ -206,6 +206,7 @@ fn inputs() -> (Inputs<Peer, OldViews>, Rc<RefCell<State>>) {
     .unwrap();
     (
         Inputs {
+            vendor: 0x10de,
             requester: Peer {
                 function,
                 state: state.clone(),
@@ -395,6 +396,7 @@ fn no_reset_starts_unreset_only_when_dma_is_translated() {
         }
         let candidate = check_candidate(
             &mut inputs.requester.function,
+            0x10de,
             &PhysicalTimer(state.clone()),
             translated,
             false,
@@ -432,6 +434,7 @@ fn without_a_function_reset_or_translation_the_bus_is_reset() {
         state.borrow_mut().fail_bus_reset = fail;
         let candidate = check_candidate(
             &mut inputs.requester.function,
+            0x10de,
             &PhysicalTimer(state.clone()),
             false,
             true,
@@ -464,6 +467,7 @@ fn a_function_reset_comes_before_the_bus_reset() {
         state.borrow_mut().bus_reset = true;
         let candidate = check_candidate(
             &mut inputs.requester.function,
+            0x10de,
             &PhysicalTimer(state.clone()),
             translated,
             true,
@@ -501,6 +505,7 @@ fn a_translated_function_without_a_function_reset_still_gets_the_bus_reset() {
     state.borrow_mut().bus_reset = true;
     let candidate = check_candidate(
         &mut inputs.requester.function,
+        0x10de,
         &PhysicalTimer(state.clone()),
         true,
         true,
@@ -516,4 +521,22 @@ fn a_translated_function_without_a_function_reset_still_gets_the_bus_reset() {
         state.borrow().events,
         ["views-seal", "bus-reset", "root-drain", "bind"]
     );
+}
+
+/// The caller names the vendor it drives; a function of another is refused
+/// before anything is read past its identity.
+#[test]
+fn a_function_of_another_vendor_than_the_caller_drives_is_refused() {
+    let (mut inputs, state) = inputs();
+    let candidate = check_candidate(
+        &mut inputs.requester.function,
+        0x8086,
+        &PhysicalTimer(state.clone()),
+        true,
+        true,
+    );
+    assert_eq!(candidate, Err(Error::Identity));
+    inputs.vendor = 0x8086;
+    let failed = failure(Cold::new(inputs).quiesce_and_bind());
+    assert_eq!(failed.error, Error::Identity);
 }

@@ -14,7 +14,6 @@ use stela_driver_base::{
     },
 };
 
-const NVIDIA: u16 = 0x10de;
 const DISPLAY: u8 = 3;
 const EXPRESS: u8 = 0x10;
 
@@ -129,12 +128,15 @@ unsafe impl Preparation for PreparingRequester {
 
 pub struct Inputs<P: Preparation, V: Views<P::Config>> {
     pub requester: P,
+    /// The PCI vendor the caller drives the function as.
+    pub vendor: u16,
     pub views: V,
     pub timer: Rc<dyn Timer>,
 }
 
 struct Pending<P, V> {
     requester: Option<P>,
+    vendor: u16,
     views: V,
     timer: Rc<dyn Timer>,
     translated: bool,
@@ -180,12 +182,13 @@ impl<B, V> Ready<B, V> {
 
 fn preflight<C: ConfigSpace>(
     function: &mut Function<C>,
+    vendor: u16,
     timer: &dyn Timer,
     translated: bool,
     bus_reset: bool,
 ) -> Result<Option<Reset>, Error> {
     timer.check().map_err(Error::Clock)?;
-    if function.vendor != NVIDIA || function.class[0] != DISPLAY {
+    if function.vendor != vendor || function.class[0] != DISPLAY {
         return Err(Error::Identity);
     }
     requester::validate_stopped(function).map_err(Error::Claim)?;
@@ -216,21 +219,24 @@ fn preflight<C: ConfigSpace>(
 /// Read-only early qualification before native BAR probing/mapping. Success
 /// grants no stop, root drain, view seal or private-domain authority; Cold
 /// repeats the same checks immediately before its consumed reset attempt.
+/// `vendor`: the PCI vendor the caller drives the function as.
 /// `translated`: whether an active remapper confines the function's DMA.
 /// `bus_reset`: whether a Secondary Bus Reset of its bus is available.
 pub fn check_candidate<C: ConfigSpace>(
     function: &mut Function<C>,
+    vendor: u16,
     timer: &dyn Timer,
     translated: bool,
     bus_reset: bool,
 ) -> Result<Option<Reset>, Error> {
-    preflight(function, timer, translated, bus_reset)
+    preflight(function, vendor, timer, translated, bus_reset)
 }
 impl<P: Preparation, V: Views<P::Config>> Cold<P, V> {
     pub fn new(inputs: Inputs<P, V>) -> Self {
         Self {
             kept: ManuallyDrop::new(Box::new(Pending {
                 requester: Some(inputs.requester),
+                vendor: inputs.vendor,
                 views: inputs.views,
                 timer: inputs.timer,
                 translated: false,
@@ -256,6 +262,7 @@ impl<P: Preparation, V: Views<P::Config>> Cold<P, V> {
             let bus_reset = requester.bus_reset_available();
             let reset = preflight(
                 requester.function_mut(),
+                attempt.vendor,
                 attempt.timer.as_ref(),
                 attempt.translated,
                 bus_reset,
