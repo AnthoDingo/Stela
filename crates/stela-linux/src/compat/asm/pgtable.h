@@ -51,6 +51,8 @@ static inline bool pgtable_l5_enabled(void)
 #define _PAGE_ACCESSED	(_AT(pteval_t, 1) << 5)
 #define _PAGE_DIRTY	(_AT(pteval_t, 1) << 6)
 #define _PAGE_PSE	(_AT(pteval_t, 1) << 7)
+/* PAT's index bit in a 4 KiB entry; i915 also encodes its GPU PTEs with it. */
+#define _PAGE_PAT	(_AT(pteval_t, 1) << 7)
 #define _PAGE_NX	(_AT(pteval_t, 1) << 63)
 
 /* Original x86-64 pure value encodings, not page-table access authority.
@@ -60,7 +62,14 @@ static inline bool pgtable_l5_enabled(void)
 #define _PAGE_KNL_ERRATUM_MASK (_PAGE_DIRTY | _PAGE_ACCESSED)
 #define _PAGE_SWP_EXCLUSIVE _PAGE_PWT
 
-/* Linux's default PAT programs index 1 write-combining and index 2 UC-. */
+/* Linux's default PAT programs index 1 write-combining and index 2 UC-.
+ * Every x86-64 processor has the PAT, and Stela keeps it on (stela-boot's
+ * paging.rs); the memory owner mapping a page decides how it honours a
+ * write-combining protection. */
+static inline bool pat_enabled(void)
+{
+	return true;
+}
 #define pgprot_writecombine(prot) __pgprot(pgprot_val(prot) | _PAGE_PWT)
 #define pgprot_noncached(prot) __pgprot(pgprot_val(prot) | _PAGE_PCD)
 
@@ -229,4 +238,7 @@ static inline pud_t *p4d_pgtable(p4d_t p4d)
 #define PAGE_NONE	__pgprot(0)
 #define PAGE_KERNEL	__pgprot(_PAGE_PRESENT | _PAGE_RW | _PAGE_ACCESSED | \
 				 _PAGE_DIRTY | _PAGE_NX)
+/* x86's kernel I/O mappings differ only by memory encryption, which Stela
+ * does not use. */
+#define PAGE_KERNEL_IO	PAGE_KERNEL
 #endif

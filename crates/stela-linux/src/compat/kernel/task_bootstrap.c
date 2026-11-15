@@ -23,6 +23,8 @@
 #include <linux/workqueue.h>
 #include <linux/pid_namespace.h>
 #include <linux/kthread.h>
+#include <linux/limits.h>
+#include <asm/tsc.h>
 #include <linux/completion.h>
 #include <linux/wait.h>
 #include <linux/wait_api.h>
@@ -73,6 +75,10 @@ bool stela_linux_task_resource_roots_complete(const struct stela_linux_owner *ow
     return resource_phase == COMPLETE && resource_owner == owner;
 }
 
+/* The TSC frequency in kHz, as x86's tsc.c publishes it; set with
+ * loops_per_jiffy below. */
+unsigned int tsc_khz;
+
 int stela_linux_task_bootstrap_resources(const struct stela_linux_owner *owner)
 {
     int error = stela_linux_require_current(owner);
@@ -85,7 +91,7 @@ int stela_linux_task_bootstrap_resources(const struct stela_linux_owner *owner)
     if (!owner->services->calibrated_tsc_hz)
         return -ENODEV;
     u64 tsc_hz = owner->services->calibrated_tsc_hz(owner->context);
-    if (tsc_hz < HZ)
+    if (tsc_hz < HZ || tsc_hz / 1000 > UINT_MAX)
         return -ENODEV;
 
     /* Commit retaining attempt BEFORE any one-shot external/source effect.
@@ -101,6 +107,8 @@ int stela_linux_task_bootstrap_resources(const struct stela_linux_owner *owner)
     /* Match x86 get_loops_per_jiffy() using the retained calibrated rate.
      * The workqueue threshold uses this before any worker starts. */
     loops_per_jiffy = tsc_hz / HZ;
+    /* x86's tsc_init() rate, from the same calibration. */
+    tsc_khz = (unsigned int)(tsc_hz / 1000);
 
     /* Original early metadata with IRQs excluded only around the CPU setup.
      * The allocator and workqueue constructors below need process context. */
