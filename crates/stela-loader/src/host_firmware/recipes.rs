@@ -590,6 +590,17 @@ pub const INTEL_WIFI: &[Recipe] = &[
         2226844,
         "7a4b428edf7dfc5ec1573bc1b8f98804b52e3a469aeec8187cae9aae66b583fd",
     ),
+    // Gen1 families (`stela_drivers::net::wifi::intel::gen1`).
+    intel_wifi(
+        "intel/iwlwifi/iwlwifi-8265-36.ucode",
+        2432528,
+        "1336afcd028ed094d1fe33893c84c273bb5711be52970040344a75a12f276d56",
+    ),
+    intel_wifi(
+        "intel/iwlwifi/iwlwifi-9000-pu-b0-jf-b0-46.ucode",
+        1519568,
+        "9a0c5d938646942f9798e6212579c25771e4bb44301cd409b82abe361ca2c3e0",
+    ),
 ];
 pub const MEDIATEK_WIFI: &[Recipe] = &[
     mediatek_wifi(
@@ -961,8 +972,8 @@ pub fn require_gsp(inventory: &mut Inventory, chip: &str) -> Result<(), Error> {
 ///   (`stela_drivers::net::wifi::realtek::identity::Profile::chip_target`);
 /// - every image and PNVM an Intel device can select by its MAC, radio and
 ///   steps, which only a boot reads, under the device's binding
-///   (`stela_drivers::net::wifi::intel::identity::device_images`, which this
-///   table mirrors).
+///   (`stela_drivers::net::wifi::intel::identity::device_images` and
+///   `gen1::device_images`, which this table mirrors).
 ///
 /// Returns whether the adapter is one whose files are now required.
 pub fn require_wifi(inventory: &mut Inventory, vendor: u16, device: u16) -> Result<bool, Error> {
@@ -1045,6 +1056,10 @@ fn intel_wifi_images(device: u16) -> &'static [&'static str] {
         0xa840 | 0x7740 | 0x4d40 => &["iwlwifi-bz-b0-fm-c0-c106.ucode", "iwlwifi-bz-b0-fm-c0.pnvm"],
         // Sc MACs.
         0xe440 | 0xe340 | 0xd340 | 0x6e70 | 0xd240 => &["iwlwifi-sc-a0-fm-c0-c106.ucode"],
+        // Gen1: the 8265 and the 9560
+        // (`stela_drivers::net::wifi::intel::gen1::device_images`).
+        0x24fd => &["iwlwifi-8265-36.ucode"],
+        0x9df0 => &["iwlwifi-9000-pu-b0-jf-b0-46.ucode"],
         _ => &[],
     }
 }

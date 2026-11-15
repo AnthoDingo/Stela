@@ -117,7 +117,7 @@ impl Platform {
     const LTR_2500US: u32 = 2;
     const LTR_1820US: u32 = 3;
 
-    const fn discrete(xtal_latency: u32) -> Self {
+    pub(super) const fn discrete(xtal_latency: u32) -> Self {
         Self {
             integrated: false,
             xtal_latency,
@@ -126,7 +126,7 @@ impl Platform {
             imr: false,
         }
     }
-    const fn integrated(xtal_latency: u32, ltr_delay: u32) -> Self {
+    pub(super) const fn integrated(xtal_latency: u32, ltr_delay: u32) -> Self {
         Self {
             integrated: true,
             xtal_latency,
@@ -419,31 +419,46 @@ impl Profile {
         }
     }
     pub fn firmware_request(&self) -> Request {
-        self.request(self.firmware)
+        self.observed.request(self.firmware)
     }
     pub fn pnvm_request(&self) -> Option<Request> {
-        self.pnvm.map(|name| self.request(name))
+        self.pnvm.map(|name| self.observed.request(name))
     }
+    /// [`Observed::load`] for this adapter.
+    pub fn load<'a>(
+        &self,
+        name: &'static str,
+        provider: &'a dyn resources::Provider,
+    ) -> Result<resources::Image<'a>, resources::Error> {
+        self.observed.load(name, provider)
+    }
+    /// [`Observed::binds`] for this adapter.
+    pub fn binds(&self, name: &'static str, image: &resources::Image<'_>) -> bool {
+        self.observed.binds(name, image)
+    }
+}
+
+impl Observed {
     fn request(&self, name: &'static str) -> Request {
-        let o = self.observed;
         Request {
             name,
             hardware: format!(
                 "pci:{:04x}:{:04x}:{:04x}:{:04x}",
-                o.vendor, o.device, o.subsystem_vendor, o.subsystem_device
+                self.vendor, self.device, self.subsystem_vendor, self.subsystem_device
             ),
             revision: format!(
                 "pci-{:02x}-hw-{:08x}-rf-{:08x}",
-                o.pci_revision, o.hardware_revision, o.radio_id
+                self.pci_revision, self.hardware_revision, self.radio_id
             ),
         }
     }
     /// The same file under the device's binding, which `stela setup` writes
-    /// for an adapter it knows by PCI IDs alone ([`device_images`]).
+    /// for an adapter it knows by PCI IDs alone ([`device_images`],
+    /// [`super::gen1::device_images`]).
     fn device_request(&self, name: &'static str) -> Request {
         Request {
             name,
-            hardware: format!("pci:{INTEL:04x}:{:04x}", self.observed.device),
+            hardware: format!("pci:{INTEL:04x}:{:04x}", self.device),
             revision: DEVICE_REVISION.into(),
         }
     }
@@ -590,16 +605,29 @@ pub fn stage<'a>(
     profile: &Profile,
     provider: &'a dyn resources::Provider,
 ) -> Result<Staged<'a>, StageError> {
-    let request = profile.firmware_request();
-    let source = profile
-        .load(request.name, provider)
+    stage_image(&profile.observed, profile.firmware, provider, |fw| {
+        fw.require_family(profile.family)
+    })
+}
+
+/// Load the image `name` under `observed`'s bindings, parse it, and keep it
+/// only if `check` accepts it.
+pub(super) fn stage_image<'a>(
+    observed: &Observed,
+    name: &'static str,
+    provider: &'a dyn resources::Provider,
+    check: impl FnOnce(&Firmware<'a>) -> Result<(), firmware::Error>,
+) -> Result<Staged<'a>, StageError> {
+    let request = observed.request(name);
+    let source = observed
+        .load(name, provider)
         .map_err(|error| StageError::Resource {
             request: request.clone(),
             error: Box::new(error),
         })?;
     let firmware = Firmware::parse(source.bytes())
         .and_then(|fw| {
-            fw.require_family(profile.family)?;
+            check(&fw)?;
             Ok(fw)
         })
         .map_err(|error| StageError::Firmware { request, error })?;

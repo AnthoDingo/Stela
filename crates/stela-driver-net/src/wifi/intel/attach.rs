@@ -9,10 +9,11 @@
 use super::{
     boot::{self, BootIo, ProductResetPolicy, RomBoot},
     firmware::{self, Family},
+    gen1,
     identity::{self, IdentityError, Observed, Profile, StageError},
     link::{Inputs, Station, Wifi},
     platform::{self, Observations},
-    power::{self, ManagementSession, Power},
+    power::{self, ManagementSession, Power, Silicon},
     radio::bios::service::{BiosIo, DmiIdentity},
 };
 use crate::{
@@ -68,6 +69,16 @@ pub enum AttachError {
     },
     Step(String),
     Boot(boot::Error),
+    /// An 8000- or 9000-family function that ran its INIT image to
+    /// INIT_COMPLETE, then its runtime image up to DQA (`alive` is the
+    /// runtime image's), and was stopped again: queues, stations and scans
+    /// are not ported.
+    Gen1Transport {
+        family: gen1::Family,
+        firmware: &'static str,
+        alive: gen1::boot::Alive,
+        init: gen1::init::Init,
+    },
 }
 
 impl fmt::Display for AttachError {
@@ -75,6 +86,24 @@ impl fmt::Display for AttachError {
         match self {
             Self::NoPinnedFirmware { family, name } => {
                 write!(f, "no pinned firmware for {family:?} ({name})")
+            }
+            Self::Gen1Transport {
+                family,
+                firmware,
+                alive,
+                init,
+            } => {
+                let [a, b, c, d, e, g] = init.hardware_address;
+                write!(
+                    f,
+                    "{family:?}: {firmware} runtime image up (version {}.{:08x}, address \
+                     {a:02x}:{b:02x}:{c:02x}:{d:02x}:{e:02x}:{g:02x}, {} NVM sections, {} PHY DB \
+                     sections); queues, stations and scans are not ported",
+                    alive.ucode_major,
+                    alive.ucode_minor,
+                    init.nvm.len(),
+                    init.phy_db.len()
+                )
             }
             error => write!(f, "{error:?}"),
         }
@@ -106,6 +135,39 @@ pub unsafe fn attach<Q: BootIo, B: BiosIo>(
 ) -> Result<Station<Q, B>, AttachError> {
     let hardware_revision = io.read32(HW_REV).map_err(AttachError::Register)?;
     let radio_id = io.read32(HW_RF_ID).map_err(AttachError::Register)?;
+    if gen1::device(pci.device).is_some() {
+        let profile = gen1::Profile::select(Observed {
+            vendor: pci.vendor,
+            device: pci.device,
+            subsystem_vendor: pci.subsystem_vendor,
+            subsystem_device: pci.subsystem_device,
+            pci_revision: pci.revision,
+            link_speed: pci.link_speed,
+            hardware_revision,
+            radio_id,
+            silicon: Silicon::default(),
+        })
+        .map_err(AttachError::Identity)?;
+        let (family, firmware) = (profile.family(), profile.firmware_name());
+        let staged = profile.stage(inputs.firmware).map_err(staging)?;
+        // SAFETY: the caller's contract is the gen1 boot's, for each image.
+        let (_, init, io) =
+            unsafe { gen1::init::run(io, profile.clone(), staged, inputs.pages, domain.clone()) }
+                .map_err(AttachError::Boot)?;
+        let staged = profile.stage(inputs.firmware).map_err(staging)?;
+        // SAFETY: as for INIT; its stop handed the function back.
+        let (mut boot, runtime) =
+            unsafe { gen1::runtime::start(io, profile, staged, &init, inputs.pages, domain) }
+                .map_err(AttachError::Boot)?;
+        // Nothing past DQA is ported: the runtime image stops again.
+        boot.stop().map_err(AttachError::Boot)?;
+        return Err(AttachError::Gen1Transport {
+            family,
+            firmware,
+            alive: runtime.alive,
+            init,
+        });
+    }
     let (family, _) =
         identity::device(pci.device).ok_or(AttachError::Identity(IdentityError::UnsupportedPci))?;
     let silicon = power::read_silicon(
@@ -152,6 +214,19 @@ pub unsafe fn attach<Q: BootIo, B: BiosIo>(
     Ok(unsafe { Wifi::new(boot, inputs) })
 }
 
+fn staging(error: StageError) -> AttachError {
+    match error {
+        StageError::Resource { request, error } => AttachError::Resource {
+            name: request.name,
+            kind: error.kind,
+        },
+        StageError::Firmware { request, error } => AttachError::Firmware {
+            name: request.name,
+            error,
+        },
+    }
+}
+
 /// Stage `profile`'s firmware, wake the function and ROM-boot it.
 ///
 /// # Safety
@@ -175,14 +250,7 @@ pub(super) unsafe fn start<Q: BootIo>(
                 name: request.name,
             }
         }
-        StageError::Resource { request, error } => AttachError::Resource {
-            name: request.name,
-            kind: error.kind,
-        },
-        StageError::Firmware { request, error } => AttachError::Firmware {
-            name: request.name,
-            error,
-        },
+        error => staging(error),
     })?;
     let mut power = Power::new(io, profile);
     if vector {
