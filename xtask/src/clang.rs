@@ -409,10 +409,20 @@ pub fn select(host: &dyn Host) -> Result<Toolset, Problems> {
                 linker,
                 archiver,
                 symbols,
-                libclang: host.canonical(&libclang),
+                libclang: without_verbatim(host.canonical(&libclang)),
             })
         }
         _ => Err(Problems(problems)),
+    }
+}
+
+/// `path` without the `\\?\` prefix `fs::canonicalize` gives a Windows drive
+/// path: clang-sys, which loads libclang for bindgen, finds no library
+/// under it.
+fn without_verbatim(path: PathBuf) -> PathBuf {
+    match path.to_str().and_then(|text| text.strip_prefix(r"\\?\")) {
+        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => PathBuf::from(rest),
+        _ => path,
     }
 }
 

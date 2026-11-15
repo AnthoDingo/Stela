@@ -529,3 +529,15 @@ fn a_ccache_wrapper_stays_in_front_of_the_real_install() {
     let found = candidates(&host);
     assert_eq!(found.len(), 1, "{found:?}");
 }
+
+#[test]
+fn libclang_is_named_without_the_windows_verbatim_prefix() {
+    assert_eq!(
+        without_verbatim(path(r"\?\C:\Program Files\LLVM\bin\libclang.dll")),
+        path(r"C:\Program Files\LLVM\bin\libclang.dll")
+    );
+    let share = path(r"\?\UNC\host\share\libclang.dll");
+    assert_eq!(without_verbatim(share.clone()), share);
+    let plain = path("/usr/lib/libclang.so");
+    assert_eq!(without_verbatim(plain.clone()), plain);
+}
