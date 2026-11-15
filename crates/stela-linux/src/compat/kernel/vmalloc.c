@@ -5,6 +5,8 @@
  * keeps which pages back each mapping, for vmalloc_to_page and vfree. */
 #include <linux/llist.h>
 #include <linux/mm.h>
+#include <linux/notifier.h>
+#include <linux/oom.h>
 #include <linux/overflow.h>
 #include <linux/rbtree.h>
 #include <linux/slab.h>
@@ -250,6 +252,66 @@ void *kvrealloc_node_align_noprof(const void *object, DECL_TOKEN_PARAMS(size, to
 	return fresh;
 }
 
+/* Linux runs these chains when it purges lazily freed areas to satisfy a
+ * vmap (mm/vmalloc.c) and before it kills a task for memory (mm/oom_kill.c).
+ * Stela does neither: the owner maps each area when it is made, and Linux code
+ * under Stela kills no task. Each chain keeps its blocks and is never run. */
+static struct notifier_block *vmap_purge_chain, *oom_chain;
+static DEFINE_SPINLOCK(chain_lock);
+
+/* Ordered by descending priority, as kernel/notifier.c keeps a chain. */
+static int chain_register(struct notifier_block **chain, struct notifier_block *block)
+{
+	spin_lock(&chain_lock);
+	for (; *chain && (*chain)->priority >= block->priority; chain = &(*chain)->next) {
+		if (*chain == block) {
+			spin_unlock(&chain_lock);
+			WARN(1, "notifier callback %ps already registered", block->notifier_call);
+			return -EEXIST;
+		}
+	}
+	block->next = *chain;
+	*chain = block;
+	spin_unlock(&chain_lock);
+	return 0;
+}
+
+static int chain_unregister(struct notifier_block **chain, struct notifier_block *block)
+{
+	int error = -ENOENT;
+
+	spin_lock(&chain_lock);
+	for (; *chain; chain = &(*chain)->next) {
+		if (*chain == block) {
+			*chain = block->next;
+			error = 0;
+			break;
+		}
+	}
+	spin_unlock(&chain_lock);
+	return error;
+}
+
+int register_vmap_purge_notifier(struct notifier_block *block)
+{
+	return chain_register(&vmap_purge_chain, block);
+}
+
+int unregister_vmap_purge_notifier(struct notifier_block *block)
+{
+	return chain_unregister(&vmap_purge_chain, block);
+}
+
+int register_oom_notifier(struct notifier_block *block)
+{
+	return chain_register(&oom_chain, block);
+}
+
+int unregister_oom_notifier(struct notifier_block *block)
+{
+	return chain_unregister(&oom_chain, block);
+}
+
 #ifdef STELA_LINUX_VMALLOC_TEST
 #include <stela/page.h>
 #include <stela/test.h>
@@ -358,6 +420,15 @@ int main(void)
 	aliasing = false;
 	assert(again == alias && vmalloc_to_page(again + PAGE_SIZE) == second);
 	vunmap(again);
+
+	struct notifier_block low = {.priority = 0}, high = {.priority = 1};
+	assert(!register_vmap_purge_notifier(&low) && !register_vmap_purge_notifier(&high));
+	assert(vmap_purge_chain == &high && high.next == &low && !low.next);
+	assert(!unregister_vmap_purge_notifier(&high) && vmap_purge_chain == &low);
+	assert(unregister_vmap_purge_notifier(&high) == -ENOENT);
+	assert(!register_oom_notifier(&high) && oom_chain == &high);
+	assert(!unregister_oom_notifier(&high) && !oom_chain);
+	assert(!unregister_vmap_purge_notifier(&low) && !vmap_purge_chain);
 	assert(unmapped == 2 && is_vmalloc_addr(zeroed));
 	assert(!vmap(pages, 2, VM_MAP, PAGE_NONE));
 
