@@ -218,12 +218,19 @@ ssize_t show_class_attr_string(const struct class *class, const struct class_att
 }
 
 /* Components join an aggregate device when its master registers. Stela's
- * audio does not bind to GPUs' HDMI codecs through one, so none ever does. */
+ * audio does not bind to GPUs' HDMI codecs through one, nor MEI to i915's
+ * HDCP, so none ever does. */
 int component_add(struct device *dev, const struct component_ops *ops)
 {
 	(void)dev;
 	(void)ops;
 	return 0;
+}
+
+int component_add_typed(struct device *dev, const struct component_ops *ops, int subcomponent)
+{
+	(void)subcomponent;
+	return component_add(dev, ops);
 }
 
 void component_del(struct device *dev, const struct component_ops *ops)
@@ -232,8 +239,10 @@ void component_del(struct device *dev, const struct component_ops *ops)
 	(void)ops;
 }
 
-/* Runtime power dependencies, which only a bound audio component makes. */
+/* Runtime power dependencies, which only a bound audio component makes and
+ * removes. */
 STELA_UNSUPPORTED(struct device_link *, device_link_add, struct device *, struct device *, u32)
+STELA_UNSUPPORTED(void, device_link_remove, void *, struct device *)
 
 #ifdef STELA_LINUX_DEVICE_TEST
 #include <stela/linux.h>
