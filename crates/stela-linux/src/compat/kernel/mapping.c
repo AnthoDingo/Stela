@@ -459,6 +459,7 @@ bool stela_linux_unmap_writable_folio(struct folio *folio)
 #include <linux/fdtable.h>
 #include <linux/anon_inodes.h>
 #include <linux/init_task.h>
+#include <linux/shmem_fs.h>
 #include <stela/page_test.h>
 #include <stela/test.h>
 
@@ -636,6 +637,35 @@ static void witness_refused_unmap(void)
 	refuse_unmap();
 }
 
+/* A shmem file's page, as i915 reads and truncates it: allocated zeroed once,
+ * kept by the mapping, freed by truncation. */
+static void test_shmem_pages(void)
+{
+	struct file *file = shmem_file_setup("object", PAGE_SIZE, EMPTY_VMA_FLAGS);
+
+	assert(!IS_ERR(file));
+	struct address_space *pages = file->f_mapping;
+	struct folio *folio = shmem_read_folio_gfp(pages, 0, GFP_KERNEL);
+
+	assert(!IS_ERR(folio) && folio_ref_count(folio) == 2);
+	assert(folio->index == 0 && folio->mapping == pages && pages->nrpages == 1);
+	assert(folio_test_uptodate(folio) && !((u8 *)folio_address(folio))[PAGE_SIZE - 1]);
+	memset(folio_address(folio), 0xa5, PAGE_SIZE);
+	assert(shmem_read_mapping_page_gfp(pages, 0, GFP_KERNEL) == &folio->page);
+	assert(folio_ref_count(folio) == 3);
+	folio_put(folio);
+	assert(PTR_ERR(shmem_read_folio_gfp(pages, 1, GFP_KERNEL)) == -EINVAL);
+	/* A range that ends inside the page zeroes that part and keeps it. */
+	shmem_truncate_range(file_inode(file), 0, 99);
+	assert(pages->nrpages == 1 && !((u8 *)folio_address(folio))[99]);
+	assert(((u8 *)folio_address(folio))[100] == 0xa5);
+	shmem_truncate_range(file_inode(file), 0, (uoff_t)-1);
+	assert(!pages->nrpages && !folio->mapping && folio_ref_count(folio) == 1);
+	assert(xa_empty(&pages->i_pages));
+	folio_put(folio);
+	fput(file);
+}
+
 int main(void)
 {
 	stela_linux_enter(&owner);
@@ -730,6 +760,7 @@ int main(void)
 	assert(!close_fd((unsigned int)fd));
 	fput(file);
 	test_file_page_pin();
+	test_shmem_pages();
 	stela_linux_exit();
 	printf("Linux client mappings passed\n");
 	return 0;

@@ -13,13 +13,7 @@
 #include <stela/linux.h>
 #include <unsupported.h>
 
-/* Pages behind shmem files and shmem-backed GEM objects, which swap and
- * nouveau's TTM objects never need: TTM allocates pages from its own pool and
- * Stela never reclaims them. */
-STELA_UNSUPPORTED(struct folio *, shmem_read_folio_gfp, struct address_space *, pgoff_t, gfp_t)
-STELA_UNSUPPORTED(struct page *, shmem_read_mapping_page_gfp, struct address_space *, pgoff_t,
-		  gfp_t)
-STELA_UNSUPPORTED(void, shmem_truncate_range, struct inode *, loff_t, uoff_t)
+/* Writing shmem pages out to swap, which Stela does not have. */
 struct swap_iocb;
 STELA_UNSUPPORTED(int, shmem_writeout, struct folio *, struct swap_iocb **, struct list_head *)
 STELA_UNSUPPORTED(bool, folio_clear_dirty_for_io, struct folio *)

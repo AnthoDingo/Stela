@@ -36,16 +36,13 @@ const HARNESS: &str = "stela_test_";
 /// lacks, or defines only as a trap, by service. Building fails when the
 /// imports change, so each supplied service leaves this list with its change.
 const OPEN: &[(&str, &[&str])] = &[
-    // Traps nothing nouveau runs reaches. Shmem-backed pages: TTM allocates
-    // from its own pool and Stela never swaps it out.
+    // Traps nothing nouveau runs reaches: TTM allocates from its own pool
+    // and Stela never swaps it out.
     (
-        "shmem and page cache",
+        "swap and page cache",
         &[
             "folio_clear_dirty_for_io",
             "mm_get_unmapped_area",
-            "shmem_read_folio_gfp",
-            "shmem_read_mapping_page_gfp",
-            "shmem_truncate_range",
             "shmem_writeout",
         ],
     ),

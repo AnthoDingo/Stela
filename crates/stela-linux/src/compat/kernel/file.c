@@ -18,6 +18,7 @@
 #include <linux/llist.h>
 #include <linux/mount.h>
 #include <linux/pseudo_fs.h>
+#include <linux/pagemap.h>
 #include <linux/shmem_fs.h>
 #include <linux/jiffies.h>
 #include <linux/slab.h>
@@ -41,11 +42,17 @@ static struct inode *inode_of_mode(umode_t mode)
 	return inode;
 }
 
+static const struct address_space_operations shmem_aops;
+
 void stela_linux_compat_iput(struct inode *inode)
 {
 	if (inode && atomic_dec_and_test(&inode->i_count)) {
 		if (S_ISCHR(inode->i_mode))
 			cd_forget(inode);
+		if (inode->i_mapping->a_ops == &shmem_aops) {
+			shmem_truncate_range(inode, 0, (uoff_t)-1);
+			xa_destroy(&inode->i_mapping->i_pages);
+		}
 		kfree(inode);
 	}
 }
@@ -194,9 +201,16 @@ struct file *alloc_file_pseudo(struct inode *inode, struct vfsmount *mount, cons
 	return file;
 }
 
-/* An object with no backing store, as nouveau's GEM objects take one only for
- * their size and mapping offset. Pages for it are what the OPEN list's shmem
- * entries would serve. */
+/* Pages of a shmem file stay in memory: Stela neither swaps nor writes them
+ * back, so marking one dirty only records it, as shmem's own aops do. */
+static const struct address_space_operations shmem_aops = {
+	.dirty_folio = noop_dirty_folio,
+};
+
+/* A memory-backed object, as GEM objects are: its pages are allocated
+ * zeroed when first read (shmem_read_folio_gfp) and freed by truncation or
+ * with the file. nouveau's objects take it only for their size and mapping
+ * offset. */
 struct file *shmem_file_setup(const char *name, loff_t size, vma_flags_t flags)
 {
 	(void)name;
@@ -206,7 +220,74 @@ struct file *shmem_file_setup(const char *name, loff_t size, vma_flags_t flags)
 	if (IS_ERR(inode))
 		return ERR_CAST(inode);
 	inode->i_size = size;
+	inode->i_mapping->a_ops = &shmem_aops;
 	return new_file(inode, NULL, O_RDWR, NULL);
+}
+
+/* The page at index, which the mapping keeps, with a reference for the
+ * caller; as mm/shmem.c's SGP_CACHE read, nothing at or past the size. */
+struct folio *shmem_read_folio_gfp(struct address_space *mapping, pgoff_t index, gfp_t gfp)
+{
+	loff_t size = i_size_read(mapping->host);
+
+	if (size <= 0 || index > (pgoff_t)(size - 1) >> PAGE_SHIFT)
+		return ERR_PTR(-EINVAL);
+	struct folio *folio = xa_load(&mapping->i_pages, index);
+
+	if (folio) {
+		folio_get(folio);
+		return folio;
+	}
+	folio = folio_alloc(gfp | __GFP_ZERO, 0);
+	if (!folio)
+		return ERR_PTR(-ENOMEM);
+	folio->mapping = mapping;
+	folio->index = index;
+	folio_mark_uptodate(folio);
+	/* The cache's own nodes take the reclaim part of the caller's flags, as
+	 * mm/internal.h's GFP_RECLAIM_MASK keeps it. */
+	gfp_t nodes = gfp & (GFP_KERNEL | __GFP_NOWARN | __GFP_NORETRY | __GFP_RETRY_MAYFAIL);
+	void *old = xa_cmpxchg_irq(&mapping->i_pages, index, NULL, folio, nodes);
+
+	if (old) {
+		folio->mapping = NULL;
+		folio_put(folio);
+		return xa_is_err(old) ? ERR_PTR(xa_err(old)) : ERR_PTR(-EBUSY);
+	}
+	mapping->nrpages++;
+	folio_get(folio);
+	return folio;
+}
+
+struct page *shmem_read_mapping_page_gfp(struct address_space *mapping, pgoff_t index, gfp_t gfp)
+{
+	struct folio *folio = shmem_read_folio_gfp(mapping, index, gfp);
+
+	return IS_ERR(folio) ? ERR_CAST(folio) : folio_file_page(folio, index);
+}
+
+/* Frees the pages wholly within [start, end] and zeroes the rest of the
+ * range in the pages it shares; end is inclusive. */
+void shmem_truncate_range(struct inode *inode, loff_t start, uoff_t end)
+{
+	struct address_space *mapping = inode->i_mapping;
+	pgoff_t first = (pgoff_t)start >> PAGE_SHIFT, last = (pgoff_t)(end >> PAGE_SHIFT);
+	struct folio *folio;
+	unsigned long index;
+
+	xa_for_each_range(&mapping->i_pages, index, folio, first, last) {
+		size_t from = index == first ? offset_in_page(start) : 0;
+		size_t to = index == last ? offset_in_page(end) + 1 : PAGE_SIZE;
+
+		if (from || to < PAGE_SIZE) {
+			folio_zero_range(folio, from, to - from);
+			continue;
+		}
+		xa_erase_irq(&mapping->i_pages, index);
+		folio->mapping = NULL;
+		mapping->nrpages--;
+		folio_put(folio);
+	}
 }
 
 struct file *shmem_file_setup_with_mnt(struct vfsmount *mount, const char *name, loff_t size,
@@ -568,6 +649,7 @@ int main(void)
 
 	struct file *object = shmem_file_setup("test", 8192, EMPTY_VMA_FLAGS);
 	assert(!IS_ERR(object) && file_inode(object)->i_size == 8192);
+	assert(object->f_mapping->a_ops == &shmem_aops);
 	fput(object);
 
 	struct pin_interleave overlap = {};
