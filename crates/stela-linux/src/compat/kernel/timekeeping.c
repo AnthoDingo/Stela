@@ -17,6 +17,19 @@ ktime_t ktime_get(void)
 	return owner->services->now_ns(owner->context);
 }
 
+/* CLOCK_MONOTONIC_RAW is CLOCK_MONOTONIC without NTP's frequency correction.
+ * Stela corrects no clock's frequency, so the two are one clock. */
+ktime_t ktime_get_raw(void)
+{
+	return ktime_get();
+}
+
+/* The monotonic clock never reads before its epoch: sched_clock's sample. */
+u64 ktime_get_raw_fast_ns(void)
+{
+	return sched_clock();
+}
+
 notrace u64 sched_clock(void)
 {
 	ktime_t now = ktime_get();

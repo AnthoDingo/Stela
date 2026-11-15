@@ -130,9 +130,14 @@ static void hrtimer_waits(void)
 	assert(!hrtimer_active(&timer));
 	hrtimer_start(&timer, ms_to_ktime(5), HRTIMER_MODE_REL);
 	assert(hrtimer_active(&timer) && !fires);
+	ktime_t before = ktime_get();
 	wait_for_completion(&high_fired);
 	assert(fires == 1 && !hrtimer_active(&timer));
 	assert(!hrtimer_cancel(&timer));
+	/* The raw clock is the monotonic clock: it read the timer's wait too. */
+	ktime_t raw = ktime_get_raw();
+	assert(raw >= before && raw <= ktime_get());
+	assert(ktime_get_raw_fast_ns() >= (u64)raw);
 
 	/* An already-expired timer runs, and cancelling a different timer
 	 * leaves that expiry intact. */
