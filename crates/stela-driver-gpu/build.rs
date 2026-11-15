@@ -9,6 +9,9 @@ mod native;
 mod nouveau;
 #[path = "build/nouveau_firmware.rs"]
 mod nouveau_firmware;
+#[cfg(feature = "drm-port")]
+#[path = "build/port.rs"]
+mod port;
 
 fn main() {
     nouveau_firmware::validate();
@@ -30,7 +33,7 @@ fn main() {
     );
     #[cfg(feature = "linux-kernel")]
     linux.tests(&mut tests);
-    #[cfg(feature = "nouveau-port")]
+    #[cfg(feature = "drm-port")]
     let mut linux = linux;
     #[cfg(feature = "nouveau-port")]
     nouveau::port(&mut linux);

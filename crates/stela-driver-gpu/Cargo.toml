@@ -18,9 +18,12 @@ workspace = true
 [features]
 # Common native Linux kernel services; selecting this attaches no GPU.
 linux-kernel = ["dep:cc", "dep:stela-c-build", "stela-c-build/linux", "dep:stela-linux", "stela-linux/kernel"]
+# DRM's core and helpers in the Linux environment, which a DRM driver port
+# builds on; selecting this attaches no GPU.
+drm-port = ["linux-kernel", "stela-c-build/linux-registry"]
 # nouveau's hardware resource manager (NVKM), compiled unchanged; it reaches
 # no device until the kernel services it imports are supplied.
-nouveau-port = ["linux-kernel", "stela-c-build/linux-registry"]
+nouveau-port = ["drm-port"]
 # Stela's Metal device over the internal Vulkan boundary; no Vulkan driver.
 metal = ["dep:stela-contracts"]
 # The Metal device's native backend over a loaded Vulkan driver (NVK).

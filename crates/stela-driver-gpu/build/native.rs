@@ -4,7 +4,7 @@ use std::path::Path;
 use std::{env, path::PathBuf};
 #[cfg(feature = "linux-kernel")]
 use stela_c_build::linux_build::{archive, linux_archive, out_dir, sources};
-#[cfg(feature = "nouveau-port")]
+#[cfg(feature = "drm-port")]
 use stela_c_build::{
     linux_build::{upstream_build, upstream_warnings},
     linux_capture::{self, COMMON, Captured, Import, Projection, Unit, UnitSpec},
@@ -30,18 +30,18 @@ const COMPAT: &str = "../stela-linux/src/compat";
 #[cfg(feature = "linux-kernel")]
 pub struct Linux {
     pub environment: stela_c_build::linux::Environment,
-    #[cfg(feature = "nouveau-port")]
+    #[cfg(feature = "drm-port")]
     pub archive: PathBuf,
-    #[cfg(feature = "nouveau-port")]
+    #[cfg(feature = "drm-port")]
     pub common_archive: PathBuf,
-    #[cfg(feature = "nouveau-port")]
+    #[cfg(feature = "drm-port")]
     pub captured: Vec<Captured>,
     pub hosted: Vec<PathBuf>,
 }
-/// DRM's core and the helpers nouveau selects, as Linux's `drm-y`,
+/// DRM's core and the helpers its drivers select, as Linux's `drm-y`,
 /// `drm_kms_helper-y`, `ttm-y`, `gpu-sched-y` and `drm_display_helper-y`
 /// compose them under Stela's Kconfig.
-#[cfg(feature = "nouveau-port")]
+#[cfg(feature = "drm-port")]
 const DRM_SOURCES: &[&str] = &[
     "drm_atomic",
     "drm_atomic_uapi",
@@ -125,7 +125,7 @@ const DRM_SOURCES: &[&str] = &[
 ];
 
 /// Class-owned registration prefix after the shared common cohort.
-#[cfg(feature = "nouveau-port")]
+#[cfg(feature = "drm-port")]
 const DRM_UNITS: &[UnitSpec] = &[
     UnitSpec {
         scope: stela_c_build::linux_capture::Scope {
@@ -166,7 +166,7 @@ const DRM_UNITS: &[UnitSpec] = &[
 ];
 
 /// Reviewed common-first/DRM-next prefix, used again by the final class image.
-#[cfg(feature = "nouveau-port")]
+#[cfg(feature = "drm-port")]
 pub fn environment_units() -> Vec<UnitSpec> {
     COMMON.iter().chain(DRM_UNITS).copied().collect()
 }
@@ -193,9 +193,9 @@ impl Linux {
         .into_iter()
         .map(PathBuf::from)
         .collect::<Vec<_>>();
-        #[cfg(feature = "nouveau-port")]
+        #[cfg(feature = "drm-port")]
         let mut upstream = upstream;
-        #[cfg(feature = "nouveau-port")]
+        #[cfg(feature = "drm-port")]
         upstream.extend(
             DRM_SOURCES
                 .iter()
@@ -204,7 +204,7 @@ impl Linux {
         let hosted_upstream = upstream[..4].to_vec();
         let mut build = stela_c_build::native::configure();
         environment.apply(&mut build, None, &[], None);
-        #[cfg(feature = "nouveau-port")]
+        #[cfg(feature = "drm-port")]
         let (captured, shared_count) = {
             let mut captured_build = upstream_build(&build, Path::new(COMPAT));
             upstream_warnings(&mut captured_build);
@@ -279,7 +279,7 @@ impl Linux {
             }
             (captured, shared_count)
         };
-        #[cfg(feature = "nouveau-port")]
+        #[cfg(feature = "drm-port")]
         {
             let source = linux_capture::source(
                 &captured,
@@ -303,11 +303,11 @@ impl Linux {
         );
         let mut linux = Self {
             environment,
-            #[cfg(feature = "nouveau-port")]
+            #[cfg(feature = "drm-port")]
             archive: _class_archive,
-            #[cfg(feature = "nouveau-port")]
+            #[cfg(feature = "drm-port")]
             common_archive: shared.join("libstela-linux.a"),
-            #[cfg(feature = "nouveau-port")]
+            #[cfg(feature = "drm-port")]
             captured,
             hosted: Vec::new(),
         };
@@ -335,7 +335,7 @@ impl Linux {
         linux
     }
 
-    #[cfg(feature = "nouveau-port")]
+    #[cfg(feature = "drm-port")]
     pub fn take_captured(&mut self) -> Vec<Captured> {
         std::mem::take(&mut self.captured)
     }
