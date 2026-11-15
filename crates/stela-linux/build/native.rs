@@ -612,6 +612,7 @@ impl Linux {
             ),
             ("linux_reclaim", "reclaim.c", "STELA_LINUX_RECLAIM_TEST"),
             ("linux_sort", "sort.c", "STELA_LINUX_SORT_TEST"),
+            ("linux_seq", "seq.c", "STELA_LINUX_SEQ_TEST"),
             ("linux_usercopy", "usercopy.c", "STELA_LINUX_USERCOPY_TEST"),
             ("linux_dma", "dma.c", "STELA_LINUX_DMA_TEST"),
             ("linux_pci", "pci.c", "STELA_LINUX_PCI_TEST"),
