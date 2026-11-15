@@ -75,6 +75,10 @@ pub fn upstream_warnings(build: &mut cc::Build) {
     // version, which a compiler numbered apart from LLVM (Apple's) misses.
     // Compilers without the warning reject its name, so it is probed.
     build.flag_if_supported("-Wno-attribute-alias");
+    // scripts/Makefile.warn's `cc-option`: a const local that a `typeof`
+    // copy of a const field declares and assigns later, as i915's wait
+    // macros do. -Wuninitialized still reports one read before it is set.
+    build.flag_if_supported("-Wno-default-const-init-unsafe");
 }
 
 /// Clang reports nothing from system headers, not even a call to a service no
