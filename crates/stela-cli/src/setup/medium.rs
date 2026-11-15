@@ -711,7 +711,8 @@ pub(super) fn write(options: WriteOptions<'_>) -> Result<Written> {
     let json = manifest.to_json();
     efi::write_atomic(&manifest_path, json.as_bytes(), false)?;
     written.manifest_sha256 = stela_formats::sha256(json.as_bytes());
-    progress.finish();
+    writing.finish();
+    verifying.finish();
     Ok(written)
 }
 
