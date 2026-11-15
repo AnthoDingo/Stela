@@ -486,7 +486,7 @@ fn read_piece(
     offset: u64,
     size: u64,
     partial: Option<&Path>,
-    progress: &crate::progress::Phase,
+    progress: Option<&crate::progress::Phase>,
     mut consume: impl FnMut(&[u8]),
 ) -> Result<()> {
     ipsw.seek(SeekFrom::Start(offset))?;
@@ -503,7 +503,9 @@ fn read_piece(
                 .with_context(|| format!("cannot write {}", path.display())),
             _ => Ok(()),
         }?;
-        progress.advance(bytes.len() as u64);
+        if let Some(progress) = progress {
+            progress.advance(bytes.len() as u64);
+        }
         Ok(())
     })?;
     if let Some(out) = out {
@@ -573,8 +575,21 @@ pub(super) fn write(options: WriteOptions<'_>) -> Result<Written> {
     let mut piece_blocks = Vec::new();
     let mut written = Written::default();
     let mut offset = 0;
-    let progress =
-        crate::progress::Phase::bytes("Writing and verifying the stick image", total * 2);
+    // The bytes the stick lacks, which are the only ones written to it.
+    let lacking: u64 = sizes
+        .iter()
+        .enumerate()
+        .filter(|&(index, &size)| {
+            !fs::metadata(directory.join(piece_name(index))).is_ok_and(|m| m.len() == size)
+        })
+        .map(|(_, &size)| size)
+        .sum();
+    let group = indicatif::MultiProgress::new();
+    let writing =
+        crate::progress::Phase::bytes_in(&group, "Writing the stick image", lacking, true);
+    // Every piece is read back from the stick once, kept or written.
+    let verifying =
+        crate::progress::Phase::bytes_in(&group, "Verifying the stick image", total, false);
     for (index, &size) in sizes.iter().enumerate() {
         let name = piece_name(index);
         let path = directory.join(&name);
@@ -593,7 +608,7 @@ pub(super) fn write(options: WriteOptions<'_>) -> Result<Written> {
             offset,
             size,
             (!present).then_some(partial.as_path()),
-            &progress,
+            (!present).then_some(&writing),
             |bytes| {
                 hashes.update(bytes);
                 whole.sha256.update(bytes);
@@ -605,7 +620,7 @@ pub(super) fn write(options: WriteOptions<'_>) -> Result<Written> {
         let (digest, blocks) = hashes.finish();
         // The whole-piece digest verifies the bytes represented by the
         // already-recorded block hashes.
-        let keep = present && hash_file(&path, size, &progress)? == digest;
+        let keep = present && hash_file(&path, size, &verifying)? == digest;
         if keep {
             written.kept += 1;
         } else {
@@ -613,12 +628,21 @@ pub(super) fn write(options: WriteOptions<'_>) -> Result<Written> {
                 // A complete piece whose bytes differ: removed first, as a
                 // piece of another size is, and written again.
                 fs::remove_file(&path)?;
-                progress.add_work(size * 2);
-                read_piece(&mut file, offset, size, Some(&partial), &progress, |_| {})?;
+                writing.add_work(size);
+                read_piece(
+                    &mut file,
+                    offset,
+                    size,
+                    Some(&partial),
+                    Some(&writing),
+                    |_| {},
+                )?;
+                // Its read back is one more pass over the stick.
+                verifying.add_work(size);
             }
             // Read back, so a USB that loses writes is found now.
             ensure!(
-                hash_file(&partial, size, &progress)? == digest,
+                hash_file(&partial, size, &verifying)? == digest,
                 "{} does not read back as written; the stick may be failing",
                 partial.display()
             );

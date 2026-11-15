@@ -2,7 +2,7 @@
 //! Once the setup wizard has drawn its timeline, each phase continues it: a
 //! running step on the rail, then the finished step it leaves behind. A
 //! program that embeds stela reads the running phase with [`running`].
-use indicatif::{HumanBytes, ProgressBar, ProgressStyle};
+use indicatif::{HumanBytes, MultiProgress, ProgressBar, ProgressStyle};
 use std::{
     io::{self, IsTerminal, Read, Write},
     path::Path,
@@ -122,30 +122,55 @@ pub(crate) struct Phase {
     bar: Option<ProgressBar>,
     label: String,
     finished: bool,
-    /// Its number in [`CURRENT`].
-    number: u64,
+    /// Its number in [`CURRENT`]; `None` for a phase that is not reported as
+    /// the running one.
+    number: Option<u64>,
+}
+
+/// The bar of a phase of `bytes`, if the terminal shows progress.
+fn byte_bar(label: &str, bytes: u64) -> Option<ProgressBar> {
+    io::stderr().is_terminal().then(|| {
+        let template = format!(
+            "{}{{msg}}\n{}{{wide_bar:.173/239}} {{percent:>3}}%  {{bytes}}/{{total_bytes}}  \
+             {{bytes_per_sec}}  ETA {{eta_precise}}{MARGIN}",
+            step(|rail| &rail.active),
+            detail(),
+        );
+        let bar = ProgressBar::new(bytes).with_style(
+            ProgressStyle::with_template(&template)
+                .expect("a fixed progress template")
+                .progress_chars("█▌░"),
+        );
+        bar.set_message(label.to_owned());
+        bar.enable_steady_tick(Duration::from_millis(200));
+        bar
+    })
 }
 
 impl Phase {
     pub(crate) fn bytes(label: impl Into<String>, bytes: u64) -> Self {
         let label = label.into();
-        let bar = io::stderr().is_terminal().then(|| {
-            let template = format!(
-                "{}{{msg}}\n{}{{wide_bar:.173/239}} {{percent:>3}}%  {{bytes}}/{{total_bytes}}  \
-                 {{bytes_per_sec}}  ETA {{eta_precise}}{MARGIN}",
-                step(|rail| &rail.active),
-                detail(),
-            );
-            let bar = ProgressBar::new(bytes).with_style(
-                ProgressStyle::with_template(&template)
-                    .expect("a fixed progress template")
-                    .progress_chars("█▌░"),
-            );
-            bar.set_message(label.clone());
-            bar.enable_steady_tick(Duration::from_millis(200));
-            bar
-        });
-        let number = begin(&label, Some(bytes));
+        let bar = byte_bar(&label, bytes);
+        let number = Some(begin(&label, Some(bytes)));
+        Self {
+            bar,
+            label,
+            finished: false,
+            number,
+        }
+    }
+
+    /// A byte phase drawn as one more bar of `group`, beside the others in
+    /// it. Only a `tracked` phase is the running one [`running`] reports.
+    pub(crate) fn bytes_in(
+        group: &MultiProgress,
+        label: impl Into<String>,
+        bytes: u64,
+        tracked: bool,
+    ) -> Self {
+        let label = label.into();
+        let bar = byte_bar(&label, bytes).map(|bar| group.add(bar));
+        let number = tracked.then(|| begin(&label, Some(bytes)));
         Self {
             bar,
             label,
@@ -165,7 +190,7 @@ impl Phase {
             bar.enable_steady_tick(Duration::from_secs(1));
             bar
         });
-        let number = begin(&label, None);
+        let number = Some(begin(&label, None));
         Self {
             bar,
             label,
@@ -174,8 +199,15 @@ impl Phase {
         }
     }
 
+    /// Change the running phase's report, if this phase is the one reported.
+    fn track(&self, change: impl FnOnce(&mut Progress)) {
+        if let Some(number) = self.number {
+            update(number, change);
+        }
+    }
+
     pub(crate) fn advance(&self, bytes: u64) {
-        update(self.number, |progress| {
+        self.track(|progress| {
             progress.done = progress.done.saturating_add(bytes);
         });
         if let Some(bar) = &self.bar {
@@ -184,7 +216,7 @@ impl Phase {
     }
 
     pub(crate) fn position(&self, bytes: u64) {
-        update(self.number, |progress| progress.done = bytes);
+        self.track(|progress| progress.done = bytes);
         if let Some(bar) = &self.bar {
             bar.set_position(bytes);
             bar.reset_eta();
@@ -192,7 +224,7 @@ impl Phase {
     }
 
     pub(crate) fn add_work(&self, bytes: u64) {
-        update(self.number, |progress| {
+        self.track(|progress| {
             progress.total = Some(progress.total.unwrap_or(0).saturating_add(bytes));
         });
         if let Some(bar) = &self.bar {
@@ -201,7 +233,9 @@ impl Phase {
     }
 
     pub(crate) fn finish(mut self) {
-        end(self.number);
+        if let Some(number) = self.number {
+            end(number);
+        }
         if let Some(bar) = &self.bar {
             // A one-line summary replaces the finished timers. Off the
             // timeline, a step without a size leaves nothing behind.
@@ -233,7 +267,9 @@ fn summary(glyph: fn(&Rail) -> &str) -> ProgressStyle {
 
 impl Drop for Phase {
     fn drop(&mut self) {
-        end(self.number);
+        if let Some(number) = self.number {
+            end(number);
+        }
         if !self.finished
             && let Some(bar) = &self.bar
         {
