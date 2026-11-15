@@ -2099,6 +2099,20 @@ int __cond_resched(void)
 	return 1;
 }
 
+/* kernel/sched/core.c's: drop the lock to reschedule when one is due. Without
+ * preemption spin_needbreak() is 0, so only a pending reschedule does. */
+int __cond_resched_lock(spinlock_t *lock)
+{
+	lockdep_assert_held(lock);
+	if (!spin_needbreak(lock) && !should_resched(PREEMPT_LOCK_OFFSET))
+		return 0;
+	spin_unlock(lock);
+	if (!__cond_resched())
+		cpu_relax();
+	spin_lock(lock);
+	return 1;
+}
+
 void yield(void)
 {
 	__set_current_state(TASK_RUNNING);

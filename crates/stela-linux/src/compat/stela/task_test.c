@@ -419,6 +419,15 @@ void stela_linux_task_test_runnable_boundary(void *context)
 		assert(!test_tsk_thread_flag(current, TIF_NEED_RESCHED));
 		assert(call->ticks(call->context) == 1);
 		assert(current->__state == TASK_RUNNING && stela_linux_quiescent());
+		/* A lock is dropped and taken again only for a due reschedule. A
+		 * uniprocessor's lock is its preemption count. */
+		DEFINE_SPINLOCK(lock);
+		spin_lock(&lock);
+		assert(!__cond_resched_lock(&lock) && preempt_count() == PREEMPT_LOCK_OFFSET);
+		set_tsk_thread_flag(current, TIF_NEED_RESCHED);
+		assert(__cond_resched_lock(&lock) == 1 && preempt_count() == PREEMPT_LOCK_OFFSET);
+		assert(!test_tsk_thread_flag(current, TIF_NEED_RESCHED));
+		spin_unlock(&lock);
 	}
 	if (call->mode == 2)
 		scope_end_target = current;
