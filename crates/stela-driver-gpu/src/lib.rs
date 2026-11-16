@@ -14,6 +14,9 @@ pub mod metal;
 #[cfg(feature = "nouveau-port")]
 pub mod nouveau;
 
+#[cfg(feature = "i915-port")]
+pub mod i915;
+
 pub mod cold;
 pub mod intel_quiesce;
 pub mod nouveau_chip;
@@ -102,6 +105,42 @@ impl Adapter {
     }
 }
 
+/// An Intel ISA (LPC/eSPI) bridge, which names the PCH: i915 identifies the
+/// PCH by it (`display/intel_pch.c`), so the Intel image shows it to Linux,
+/// identity only. Inventory only, as [`Adapter`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IsaBridge {
+    pub address: Address,
+    pub device: u16,
+    pub subsystem_vendor: u16,
+    pub subsystem_device: u16,
+    pub class: [u8; 3],
+    pub revision: u8,
+}
+
+impl IsaBridge {
+    /// `PCI_CLASS_BRIDGE_ISA`.
+    const CLASS: [u8; 2] = [0x06, 0x01];
+
+    /// Reads the revision and subsystem words of an Intel ISA bridge only.
+    pub fn discover<C: ConfigSpace>(
+        function: &mut Function<C>,
+    ) -> Result<Option<Self>, crate::bus::pci::ConfigError> {
+        if function.vendor != INTEL_VENDOR || function.class[..2] != Self::CLASS {
+            return Ok(None);
+        }
+        let subsystem = function.config().read32(0x2c)?;
+        Ok(Some(Self {
+            address: function.address,
+            device: function.device,
+            subsystem_vendor: subsystem as u16,
+            subsystem_device: (subsystem >> 16) as u16,
+            class: function.class,
+            revision: function.config().read8(0x08)?,
+        }))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -115,7 +154,8 @@ mod tests {
         fn read32(&self, offset: u16) -> Result<u32, crate::bus::pci::ConfigError> {
             Ok(match offset {
                 0 => 0x1234_0000 | u32::from(self.vendor),
-                8 => u32::from_be_bytes([self.class[0], self.class[1], self.class[2], 0]),
+                8 => u32::from_be_bytes([self.class[0], self.class[1], self.class[2], 0x21]),
+                0x2c => 0x081c_1028,
                 _ => panic!("GPU inventory must not read device registers"),
             })
         }
@@ -167,5 +207,34 @@ mod tests {
             }
             assert!(Adapter::discover(&function(vendor, [4, 3, 0])).is_none());
         }
+    }
+
+    #[test]
+    fn an_intel_isa_bridge_is_identified_and_others_are_not() {
+        let bridge = IsaBridge::discover(&mut function(INTEL_VENDOR, [0x06, 0x01, 0x00]));
+        assert_eq!(
+            bridge,
+            Ok(Some(IsaBridge {
+                address: Address {
+                    segment: 0,
+                    bus: 1,
+                    device: 0,
+                    function: 0,
+                },
+                device: 0x1234,
+                subsystem_vendor: 0x1028,
+                subsystem_device: 0x081c,
+                class: [0x06, 0x01, 0x00],
+                revision: 0x21,
+            }))
+        );
+        assert_eq!(
+            IsaBridge::discover(&mut function(0x1022, [0x06, 0x01, 0x00])),
+            Ok(None)
+        );
+        assert_eq!(
+            IsaBridge::discover(&mut function(INTEL_VENDOR, [0x06, 0x04, 0x00])),
+            Ok(None)
+        );
     }
 }

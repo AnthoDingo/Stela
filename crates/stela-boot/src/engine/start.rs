@@ -1340,7 +1340,17 @@ fn open_gpus(
     handoff: &Handoff,
     firmware: &Option<alloc::sync::Arc<stela_drivers::firmware::Catalog>>,
     adapters: Vec<stela_drivers::gpu::Adapter>,
+    isa_bridges: Vec<stela_drivers::gpu::IsaBridge>,
 ) -> bool {
+    // i915 programs Kaby Lake's display through the PCH it identifies by its
+    // ISA bridge (`display/intel_pch.c`): without one it would not know it.
+    #[cfg(feature = "intel")]
+    if isa_bridges.is_empty() {
+        crate::status::warn("the PC's PCH was not found, so its Intel GPU is left unused");
+        return false;
+    }
+    #[cfg(not(feature = "intel"))]
+    let _ = isa_bridges;
     let heap = handoff.heap.physical..handoff.heap.physical + handoff.heap.bytes;
     let guest_ram = handoff.guest[..handoff.guest_count]
         .iter()
@@ -1407,7 +1417,7 @@ fn open_gpus(
             // The display adapters Stela's GPU driver does not run, and why.
             for adapter in found
                 .iter()
-                .filter(|adapter| adapter.vendor != stela_drivers::gpu::Vendor::Nvidia)
+                .filter(|adapter| adapter.vendor != gpu::image_vendor())
             {
                 crate::status::info(&gpu_status::unused(adapter));
             }
@@ -1429,6 +1439,8 @@ fn open_gpus(
         wall: handoff.wall,
         #[cfg(feature = "nvk")]
         heap_bytes,
+        #[cfg(feature = "intel")]
+        isa_bridges,
     };
     // Store the claim's lines before Linux starts, so the USB keeps them
     // even when the start never returns.
@@ -2897,6 +2909,7 @@ fn start_devices(
                 mut links,
                 network_account,
                 gpus,
+                isa_bridges,
                 usb,
                 bluetooth: host_controller,
                 usb_disks,
@@ -2947,7 +2960,15 @@ fn start_devices(
             });
             if options.boots_macos()
                 && let Ok(work) = work
-                && open_gpus(work, mmio, remappers, handoff, host_firmware, gpus)
+                && open_gpus(
+                    work,
+                    mmio,
+                    remappers,
+                    handoff,
+                    host_firmware,
+                    gpus,
+                    isa_bridges,
+                )
             {
                 let firmware = handoff
                     .screen

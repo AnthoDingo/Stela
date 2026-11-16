@@ -62,7 +62,7 @@ use stela_drivers::{
             owned::{ConfigRetention, OwnedConfig},
         },
     },
-    firmware::{Catalog, ErrorKind as FirmwareError, Provider},
+    firmware::Catalog,
     gpu,
     platform::work::{
         WorkError,
@@ -96,7 +96,33 @@ const ENOMEM: Errno = -12;
 const EOPNOTSUPP: Errno = -95;
 
 /// The PCI vendor of the GPUs nouveau drives.
+#[cfg(feature = "nouveau")]
 const NVIDIA: u16 = 0x10de;
+/// The PCI vendor of the GPUs i915 drives.
+#[cfg(feature = "intel")]
+const INTEL: u16 = 0x8086;
+/// The PCI vendor of the GPUs the image's driver drives.
+#[cfg(feature = "nouveau")]
+const VENDOR: u16 = NVIDIA;
+#[cfg(feature = "intel")]
+const VENDOR: u16 = INTEL;
+/// The Intel GPUs admitted, one tested machine at a time: the UHD 620 of the
+/// Dell Latitude 7490 (Kaby Lake-R GT2, graphics version 9).
+#[cfg(feature = "intel")]
+const INTEL_DEVICES: [u16; 1] = [0x5917];
+/// The register span the Intel quiesce reaches: through
+/// `FORCEWAKE_ACK_GT_GEN9` at `0x130044` (`gpu::intel_quiesce`).
+#[cfg(feature = "intel")]
+const INTEL_REGISTERS: usize = 0x13_1000;
+#[cfg(all(feature = "nouveau", feature = "intel"))]
+compile_error!("an image carries one DRM driver: the `nouveau` or the `intel` feature");
+#[cfg(not(any(feature = "nouveau", feature = "intel")))]
+compile_error!("an image needs a DRM driver: the `nouveau` or the `intel` feature");
+/// The image's DRM driver.
+#[cfg(feature = "nouveau")]
+const DRIVER: &str = "nouveau";
+#[cfg(feature = "intel")]
+const DRIVER: &str = "i915";
 const MSI_CAPABILITY: u8 = 5;
 #[cfg(feature = "nvk")]
 const PCIE_CAPABILITY: u8 = 0x10;
@@ -786,7 +812,23 @@ struct GpuViews {
     config: ConfigRetention,
     pci_words: [u32; 8],
     registers: Mapping,
-    boot0: u32,
+    engines: Engines,
+}
+
+/// What identifies a GPU's registers across its reset, and stops its
+/// engines before it, by vendor.
+enum Engines {
+    /// `PMC_BOOT_0`, which reads the same before and after the reset.
+    /// nouveau starts what the reset leaves.
+    #[cfg(feature = "nouveau")]
+    Nvidia { boot0: u32 },
+    /// Intel's engines are stopped and reset through the registers, mapped
+    /// read-write, before the function's reset (`gpu::intel_quiesce`).
+    #[cfg(feature = "intel")]
+    Intel {
+        timer: Rc<dyn stela_drivers::bus::pci::power::Timer>,
+        name: String,
+    },
 }
 
 fn gpu_pci_words(function: &mut Function<OwnedConfig>) -> Result<[u32; 8], ConfigError> {
@@ -810,9 +852,61 @@ unsafe impl gpu::cold::Views<OwnedConfig> for GpuViews {
     fn seal(&mut self, function: &mut Function<OwnedConfig>) -> Result<(), gpu::cold::ViewError> {
         self.check(function)
     }
+
+    fn quiesce_engines(&mut self) -> Result<(), gpu::cold::ViewError> {
+        match &self.engines {
+            #[cfg(feature = "nouveau")]
+            Engines::Nvidia { .. } => Ok(()),
+            #[cfg(feature = "intel")]
+            Engines::Intel { timer, name } => {
+                let registers = &self.registers;
+                let result = gpu::intel_quiesce::quiesce(
+                    |offset| {
+                        registers
+                            .read32(offset)
+                            .map_err(|_| "a register read failed")
+                    },
+                    |offset, value| {
+                        registers
+                            .write32(offset, value)
+                            .map_err(|_| "a register write failed")
+                    },
+                    |micros| timer.wait_us(micros).map_err(|_| "the timer failed"),
+                );
+                match result {
+                    Ok(quiesced) => {
+                        output::arguments(format_args!(
+                            "GPU {name}: engines stopped and reset: rings_enabled={:#06b} \
+                             were_busy={:#06b}\n",
+                            quiesced.rings_enabled, quiesced.were_busy
+                        ));
+                        Ok(())
+                    }
+                    Err(error) => {
+                        output::arguments(format_args!(
+                            "GPU {name}: engines not stopped: {error:?}\n"
+                        ));
+                        Err(gpu::cold::ViewError::Engines)
+                    }
+                }
+            }
+        }
+    }
 }
 
 impl GpuViews {
+    /// Whether the register BAR still shows the same GPU.
+    fn same_registers(&self) -> bool {
+        match &self.engines {
+            #[cfg(feature = "nouveau")]
+            Engines::Nvidia { boot0 } => self.registers.read32(0) == Ok(*boot0),
+            // Nothing in BAR0 identifies the GPU across its reset; the
+            // configuration words above do.
+            #[cfg(feature = "intel")]
+            Engines::Intel { .. } => true,
+        }
+    }
+
     fn check(&self, function: &mut Function<OwnedConfig>) -> Result<(), gpu::cold::ViewError> {
         use gpu::cold::ViewError;
         if !function
@@ -829,7 +923,7 @@ impl GpuViews {
             & 2
             == 0
             || gpu_pci_words(function).map_err(|_| ViewError::RegisterReadback)? != self.pci_words
-            || self.registers.read32(0) != Ok(self.boot0)
+            || !self.same_registers()
         {
             return Err(ViewError::RegisterReadback);
         }
@@ -837,7 +931,9 @@ impl GpuViews {
     }
 }
 
+#[cfg(feature = "nouveau")]
 fn select_firmware(boot0: u32, catalog: Arc<Catalog>) -> Result<PciFirmware, ServiceError> {
+    use stela_drivers::firmware::{ErrorKind as FirmwareError, Provider};
     use stela_loader::host_firmware::{bundle, recipes, requirements::Inventory};
     let chip = gpu::nouveau_chip::Chip::from_boot0(boot0).ok_or(ServiceError::Refused(
         "the GPU's PMC chipset is unsupported",
@@ -960,12 +1056,12 @@ fn claim(
     let mut requester = services.prepare_requester(address)?;
     let bus_reset = requester.bus_reset_available();
     let function = requester.function_mut();
-    if (function.vendor, function.device, function.class) != (NVIDIA, adapter.device, adapter.class)
+    if (function.vendor, function.device, function.class) != (VENDOR, adapter.device, adapter.class)
     {
         return Err(ServiceError::Refused("the GPU's original identity changed"));
     }
     let translated = services.dma_translated(address);
-    gpu::cold::check_candidate(function, NVIDIA, timer.as_ref(), translated, bus_reset)
+    gpu::cold::check_candidate(function, VENDOR, timer.as_ref(), translated, bus_reset)
         .map_err(|error| cold_refusal(address, error))?;
     let owns_screen = match gop {
         ScreenOwner::Function(source) if source.address == address => {
@@ -1052,39 +1148,23 @@ fn claim(
         .retain_epoch()
         .map_err(ServiceError::Mapping)?;
     let pci_words = gpu_pci_words(function).map_err(ServiceError::Config)?;
-    let registers = services
-        .authority()?
-        .map(
-            resources[0].clone(),
-            0,
-            PAGE as usize,
-            CacheAttribute::Uncached,
-            Protection::ReadOnly,
-        )
-        .map_err(ServiceError::Mapping)?;
-    let endian = registers.read32(4).map_err(ServiceError::Mapping)?;
-    if endian == u32::MAX || endian == 0x01000001 {
-        return Err(ServiceError::Refused(
-            "the GPU register byte order is unavailable",
-        ));
-    }
-    let boot0 = registers.read32(0).map_err(ServiceError::Mapping)?;
-    let firmware = select_firmware(boot0, catalog)?;
-    if let Some(chip) = gpu::nouveau_chip::Chip::from_boot0(boot0) {
-        crate::host_inventory::text(alloc::format!("GPU{line}Chip"), chip.name);
-    }
+    #[cfg(feature = "nouveau")]
+    let (registers, engines, firmware) = nvidia_views(services, &resources[0], line, catalog)?;
+    #[cfg(feature = "intel")]
+    let (registers, engines, firmware) =
+        intel_views(services, &resources[0], adapter, catalog, timer.clone())?;
     crate::host_inventory::text(
         alloc::format!("GPU{line}PCIID"),
-        alloc::format!("{NVIDIA:04x}:{:04x}", adapter.device),
+        alloc::format!("{VENDOR:04x}:{:04x}", adapter.device),
     );
     let mut cold = gpu::cold::Cold::new(gpu::cold::Inputs {
         requester,
-        vendor: NVIDIA,
+        vendor: VENDOR,
         views: GpuViews {
             config,
             pci_words,
             registers,
-            boot0,
+            engines,
         },
         timer,
     });
@@ -1114,8 +1194,10 @@ fn claim(
     views
         .check(&mut function)
         .map_err(|error| cold_refusal(address, gpu::cold::Error::Views(error)))?;
-    if let Some(chip) =
-        gpu::nouveau_chip::Chip::from_boot0(boot0).filter(|chip| chip.waits_for_firmware_boot())
+    #[cfg(feature = "nouveau")]
+    if let Engines::Nvidia { boot0 } = views.engines
+        && let Some(chip) =
+            gpu::nouveau_chip::Chip::from_boot0(boot0).filter(|chip| chip.waits_for_firmware_boot())
     {
         wait_for_firmware_boot(services, &resources[0], chip)?;
     }
@@ -1176,8 +1258,81 @@ fn claim(
     })
 }
 
+/// An NVIDIA GPU's first register page, read-only: its byte order, its
+/// `PMC_BOOT_0` and the firmware its chipset needs.
+#[cfg(feature = "nouveau")]
+fn nvidia_views(
+    services: &dyn NativeServices,
+    resource: &owned::Resource,
+    line: u32,
+    catalog: Arc<Catalog>,
+) -> Result<(Mapping, Engines, PciFirmware), ServiceError> {
+    let registers = services
+        .authority()?
+        .map(
+            resource.clone(),
+            0,
+            PAGE as usize,
+            CacheAttribute::Uncached,
+            Protection::ReadOnly,
+        )
+        .map_err(ServiceError::Mapping)?;
+    let endian = registers.read32(4).map_err(ServiceError::Mapping)?;
+    if endian == u32::MAX || endian == 0x01000001 {
+        return Err(ServiceError::Refused(
+            "the GPU register byte order is unavailable",
+        ));
+    }
+    let boot0 = registers.read32(0).map_err(ServiceError::Mapping)?;
+    let firmware = select_firmware(boot0, catalog)?;
+    if let Some(chip) = gpu::nouveau_chip::Chip::from_boot0(boot0) {
+        crate::host_inventory::text(alloc::format!("GPU{line}Chip"), chip.name);
+    }
+    Ok((registers, Engines::Nvidia { boot0 }, firmware))
+}
+
+/// An admitted Intel GPU's registers, read-write as far as its quiesce
+/// reaches, and the firmware i915 may ask for: Kaby Lake's DMC, optional
+/// (`display/intel_dmc.c`: without it i915 only keeps runtime power
+/// management off).
+#[cfg(feature = "intel")]
+fn intel_views(
+    services: &dyn NativeServices,
+    resource: &owned::Resource,
+    adapter: &gpu::Adapter,
+    catalog: Arc<Catalog>,
+    timer: Rc<dyn stela_drivers::bus::pci::power::Timer>,
+) -> Result<(Mapping, Engines, PciFirmware), ServiceError> {
+    if !INTEL_DEVICES.contains(&adapter.device) {
+        return Err(ServiceError::Refused(
+            "this Intel GPU has not been run with Stela",
+        ));
+    }
+    let registers = services
+        .authority()?
+        .map(
+            resource.clone(),
+            0,
+            INTEL_REGISTERS,
+            CacheAttribute::Uncached,
+            Protection::ReadWrite,
+        )
+        .map_err(ServiceError::Mapping)?;
+    let target = FirmwareTarget::new("i915".into(), "intel".into(), "kbl".into(), None)
+        .map_err(|_| ServiceError::Refused("the GPU firmware target is invalid"))?;
+    let firmware = PciFirmware::new(
+        target,
+        catalog,
+        Box::new([String::from("i915/kbl_dmc_ver1_04.bin")]),
+    )
+    .map_err(|_| ServiceError::Refused("the GPU firmware name is invalid"))?;
+    let name = format!("{}", adapter.address);
+    Ok((registers, Engines::Intel { timer, name }, firmware))
+}
+
 /// Read one BAR0 register through a scoped read-only page of `registers`,
 /// or `None` when it cannot be mapped or read.
+#[cfg(feature = "nouveau")]
 fn read_register(
     services: &dyn NativeServices,
     registers: &owned::Resource,
@@ -1208,6 +1363,7 @@ fn read_register(
 /// FWSEC-FRTS sets) and the VBIOS window the PRAMIN shadow reads.
 /// `GPU AD107: firmware boot completed after N polls: gfw=… plm=… wpr2=…-…
 /// display_fuse=… vbios_window=…`, or `did not complete` and a refusal.
+#[cfg(feature = "nouveau")]
 fn wait_for_firmware_boot(
     services: &dyn NativeServices,
     registers: &owned::Resource,
@@ -1301,6 +1457,11 @@ fn cold_refusal(
 /// Why a GPU was refused when the USB lacks any of its chip's firmware files.
 const NO_FIRMWARE: &str = "no pinned firmware for the observed GPU chipset was loaded";
 
+/// The vendor of the GPUs the image's DRM driver drives.
+pub(super) fn image_vendor() -> gpu::Vendor {
+    gpu::Vendor::from_pci(VENDOR)
+}
+
 /// An NVIDIA adapter [`claim_all`] did not claim, for the boot screen
 /// (`stela_boot_core::gpu_status`).
 pub(super) struct Refused {
@@ -1325,7 +1486,7 @@ pub(super) fn claim_all(
     };
     for adapter in adapters
         .iter()
-        .filter(|adapter| adapter.vendor != gpu::Vendor::Nvidia)
+        .filter(|adapter| adapter.vendor != image_vendor())
     {
         output::arguments(format_args!(
             "GPU {} vendor={:?} device={:04x} unused: {}\n",
@@ -1337,8 +1498,9 @@ pub(super) fn claim_all(
     }
     let nvidia = adapters
         .iter()
-        .filter(|adapter| adapter.vendor == gpu::Vendor::Nvidia);
-    if !cfg!(feature = "nvk") {
+        .filter(|adapter| adapter.vendor == image_vendor());
+    // An Intel image starts i915 without a Vulkan driver until ANV joins it.
+    if !cfg!(any(feature = "nvk", feature = "intel")) {
         let mut refused = Vec::new();
         for adapter in nvidia {
             output::arguments(format_args!(
@@ -1400,6 +1562,8 @@ struct Bound {
 struct Start {
     kernel: &'static LinuxKernel,
     claimed: ManuallyDrop<Vec<Claimed>>,
+    #[cfg(feature = "intel")]
+    isa_bridges: Vec<gpu::IsaBridge>,
     completed: Rc<Cell<Option<ManuallyDrop<Started>>>>,
 }
 
@@ -1416,12 +1580,19 @@ struct Started {
 unsafe impl ManagedJob for Start {
     fn run(mut self: Pin<&mut Self>) {
         let claimed = core::mem::take(&mut *self.claimed);
-        self.completed
-            .set(Some(ManuallyDrop::new(start(self.kernel, claimed))));
+        #[cfg(feature = "intel")]
+        let started = start(self.kernel, claimed, &self.isa_bridges);
+        #[cfg(not(feature = "intel"))]
+        let started = start(self.kernel, claimed);
+        self.completed.set(Some(ManuallyDrop::new(started)));
     }
 }
 
-fn start(kernel: &LinuxKernel, claimed: Vec<Claimed>) -> Started {
+fn start(
+    kernel: &LinuxKernel,
+    claimed: Vec<Claimed>,
+    #[cfg(feature = "intel")] isa_bridges: &[gpu::IsaBridge],
+) -> Started {
     #[cfg(feature = "nvk")]
     stela_boot_core::heap::set_peak_hook(gate::peak_passed);
     let mut job = Started {
@@ -1430,8 +1601,32 @@ fn start(kernel: &LinuxKernel, claimed: Vec<Claimed>) -> Started {
         bound: Vec::new(),
         result: Ok(()),
     };
-    // SAFETY: entered, on a task.
-    job.result = unsafe { gpu::nouveau::start() };
+    #[cfg(feature = "nouveau")]
+    {
+        // SAFETY: entered, on a task.
+        job.result = unsafe { gpu::nouveau::start() };
+    }
+    #[cfg(feature = "intel")]
+    {
+        job.result = isa_bridges.iter().try_for_each(|bridge| {
+            let identity = stela_linux::function::PciIdentity {
+                vendor: INTEL,
+                device: bridge.device,
+                subsystem_vendor: bridge.subsystem_vendor,
+                subsystem_device: bridge.subsystem_device,
+                class: u32::from_be_bytes([0, bridge.class[0], bridge.class[1], bridge.class[2]]),
+                bus: bridge.address.bus,
+                devfn: bridge.address.device << 3 | bridge.address.function,
+                revision: bridge.revision,
+            };
+            // SAFETY: entered, on a task.
+            unsafe { stela_linux::function::publish_identity(&identity) }
+        });
+        if job.result.is_ok() {
+            // SAFETY: entered, on a task.
+            job.result = unsafe { gpu::i915::start() };
+        }
+    }
     if job.result.is_err() {
         // No source-specific device return was acknowledged.
         core::mem::forget(claimed);
@@ -1480,7 +1675,7 @@ fn start(kernel: &LinuxKernel, claimed: Vec<Claimed>) -> Started {
                     });
                 } else {
                     output::arguments(format_args!(
-                        "GPU {}: nouveau did not bind it\n",
+                        "GPU {}: {DRIVER} did not bind it\n",
                         claimed.name
                     ));
                 }
@@ -1560,6 +1755,10 @@ pub(super) struct Machine {
     /// The host heap capacity reported to the linked graphics runtime.
     #[cfg(feature = "nvk")]
     pub heap_bytes: u64,
+    /// The ISA bridges i915 identifies the PCH by, shown to Linux identity
+    /// only before i915 starts.
+    #[cfg(feature = "intel")]
+    pub isa_bridges: Vec<gpu::IsaBridge>,
 }
 
 fn environment_error(error: WorkError) -> kernel_work::Error {
@@ -1624,6 +1823,8 @@ pub(super) fn open(machine: Machine, claimed: Vec<Claimed>) -> Result<(), Error>
         wall,
         #[cfg(feature = "nvk")]
         heap_bytes,
+        #[cfg(feature = "intel")]
+        isa_bridges,
     } = machine;
     let image = work.image()?;
     let task_data = work.task_data()?;
@@ -1711,6 +1912,8 @@ pub(super) fn open(machine: Machine, claimed: Vec<Claimed>) -> Result<(), Error>
             platform,
             domain.clone(),
             claimed,
+            #[cfg(feature = "intel")]
+            isa_bridges,
             time.as_ref(),
         ))
     })??;
@@ -1774,6 +1977,7 @@ fn mount_and_start(
     platform: Host,
     domain: Arc<Domain<SLOTS>>,
     claimed: ManuallyDrop<Vec<Claimed>>,
+    #[cfg(feature = "intel")] isa_bridges: Vec<gpu::IsaBridge>,
     time: &dyn Clock,
 ) -> Result<MountedStartup, Error> {
     let deadline = time
@@ -1835,6 +2039,8 @@ fn mount_and_start(
     let job = Box::pin(Start {
         kernel: owner.as_ref(),
         claimed,
+        #[cfg(feature = "intel")]
+        isa_bridges,
         completed: completed.clone(),
     });
     // SAFETY: the ready original task broker keeps the callback and all
