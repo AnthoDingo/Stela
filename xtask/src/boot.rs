@@ -121,6 +121,10 @@ pub enum Command {
         /// Include authored hardware fixtures in the mount.
         #[arg(long)]
         diagnostics: bool,
+        /// Build the Intel image instead: i915 for graphics version 9, no
+        /// NVIDIA driver and, until ANV joins it, no Vulkan driver.
+        #[arg(long)]
+        intel: bool,
     },
     /// Boot `stela.efi` with an ARM image in x86 QEMU.
     Run(Box<Run>),
@@ -492,10 +496,16 @@ pub fn run(command: Command) -> Result<ExitCode> {
         Command::Build {
             release,
             diagnostics,
+            intel,
         } => {
             crate::gpu::fetch::fetch(false)?;
-            crate::gpu::build_nvk(crate::gpu::default_jobs())?;
-            println!("{}", build_for_boot(release, diagnostics, true)?.display());
+            let image = if intel {
+                Image::Intel
+            } else {
+                crate::gpu::build_nvk(crate::gpu::default_jobs())?;
+                Image::Nvk
+            };
+            println!("{}", build_for_boot(release, diagnostics, image)?.display());
             Ok(ExitCode::SUCCESS)
         }
         Command::Run(arguments) => launch(*arguments),
@@ -504,11 +514,22 @@ pub fn run(command: Command) -> Result<ExitCode> {
 
 pub fn build(release: bool) -> Result<PathBuf> {
     crate::gpu::build_nvk(crate::gpu::default_jobs())?;
-    build_with_diagnostics(release, false, true)
+    build_with_diagnostics(release, false, Image::Nvk)
 }
 
-fn build_for_boot(release: bool, diagnostics: bool, nvk: bool) -> Result<PathBuf> {
-    let built = build_with_diagnostics(release, diagnostics, nvk)?;
+/// The GPU stack an image carries.
+#[derive(Clone, Copy)]
+enum Image {
+    /// nouveau without a Vulkan driver, the image's default.
+    Nouveau,
+    /// nouveau with NVK.
+    Nvk,
+    /// i915 alone (`stela-boot`'s `intel` feature).
+    Intel,
+}
+
+fn build_for_boot(release: bool, diagnostics: bool, image: Image) -> Result<PathBuf> {
+    let built = build_with_diagnostics(release, diagnostics, image)?;
     if !release {
         return Ok(built);
     }
@@ -536,16 +557,18 @@ pub(crate) fn deploy_image(built: &Path, output: &Path) -> Result<()> {
     Ok(())
 }
 
-fn build_with_diagnostics(release: bool, diagnostics: bool, nvk: bool) -> Result<PathBuf> {
+fn build_with_diagnostics(release: bool, diagnostics: bool, image: Image) -> Result<PathBuf> {
     let mut command = cargo();
     command.args(["build", "--locked", "--manifest-path", BOOT_MANIFEST]);
     command.args(["--target", BOOT_TARGET, "--target-dir", BOOT_TARGET_DIR]);
     if diagnostics {
         command.args(["--features", "diagnostics"]);
     }
-    if nvk {
-        command.args(["--features", "nvk"]);
-    }
+    match image {
+        Image::Nouveau => &mut command,
+        Image::Nvk => command.args(["--features", "nvk"]),
+        Image::Intel => command.args(["--no-default-features", "--features", "intel"]),
+    };
     if release {
         command.arg("--release");
     }
@@ -713,7 +736,7 @@ fn launch(arguments: Run) -> Result<ExitCode> {
     let attached = storage_disks(&arguments.storage_disk, &arguments.storage_serial)?;
     let image = match &arguments.image {
         Some(image) => image.clone(),
-        None => build_for_boot(true, true, false)?,
+        None => build_for_boot(true, true, Image::Nouveau)?,
     };
     let paths = storage::Paths::new(arguments.output.clone());
     if paths.output.exists() {
