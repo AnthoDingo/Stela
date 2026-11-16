@@ -52,6 +52,7 @@ impl<T> Kept<T> {
     }
 
     /// Every value kept, for the owner's drop.
+    #[cfg(any(test, feature = "metal-vulkan"))]
     pub(crate) fn drain(&mut self) -> impl Iterator<Item = T> + '_ {
         self.entries.drain(..).map(|(_, _, value)| value)
     }
