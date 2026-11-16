@@ -6,6 +6,23 @@
 /* A function its owner built, on a bus with the owner's pci_ops. Publish an
  * already initialized/enrolled device; removal drops its registration ref. */
 int stela_linux_pci_publish_device(struct pci_dev *dev);
+
+/* What a function another owner keeps shows Linux code: found by class and
+ * identified, never configured or bound. */
+struct stela_linux_pci_identity {
+	u16 vendor;
+	u16 device;
+	u16 subsystem_vendor;
+	u16 subsystem_device;
+	/* Base class, subclass and programming interface, as pci_dev's class. */
+	u32 class;
+	u8 bus;
+	u8 devfn;
+	u8 revision;
+};
+_Static_assert(sizeof(struct stela_linux_pci_identity) == 16, "Linux PCI identity ABI");
+/* Publish it for the boot. On the entered owner's task; it may sleep. */
+int stela_linux_pci_publish_identity(const struct stela_linux_pci_identity *identity);
 bool stela_linux_pci_devices_present(void);
 /* Checked original standard capability walker. PCIBIOS failure is distinct
  * from a successful absent capability (*found == 0). No context ownership moves. */

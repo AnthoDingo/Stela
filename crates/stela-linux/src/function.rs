@@ -191,7 +191,39 @@ const _: () = assert!(size_of::<RawFunction>() == 240);
 const _: () = assert!(core::mem::offset_of!(RawFunction, enroll) == 232);
 const _: () = assert!(core::mem::offset_of!(RawFunction, release_context) == 224);
 
+/// What a function another owner keeps shows Linux code: it is found by
+/// class (`pci_get_class`) and identified, never configured or bound.
+/// `struct stela_linux_pci_identity`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PciIdentity {
+    pub vendor: u16,
+    pub device: u16,
+    pub subsystem_vendor: u16,
+    pub subsystem_device: u16,
+    /// Base class, subclass and programming interface, as `pci_dev`'s class.
+    pub class: u32,
+    pub bus: u8,
+    pub devfn: u8,
+    pub revision: u8,
+}
+
+const _: () = assert!(size_of::<PciIdentity>() == 16);
+
+/// Publish `identity` to Linux code for the boot.
+///
+/// # Safety
+/// On the entered canonical owner's task, which may sleep.
+pub unsafe fn publish_identity(identity: &PciIdentity) -> Result<(), super::owner::Errno> {
+    // SAFETY: the caller's contract; C copies the fields.
+    match unsafe { stela_linux_pci_publish_identity(identity) } {
+        0 => Ok(()),
+        error => Err(error),
+    }
+}
+
 unsafe extern "C" {
+    fn stela_linux_pci_publish_identity(identity: *const PciIdentity) -> c_int;
     fn stela_linux_pci_attach(function: *const RawFunction, error: *mut c_int) -> *mut c_void;
     fn stela_linux_owner() -> *const super::owner::RawOwner;
     fn stela_linux_pci_bound(device: *const c_void) -> bool;

@@ -339,19 +339,77 @@ struct pci_dev *pci_get_domain_bus_and_slot(int domain, unsigned int bus, unsign
 	return NULL;
 }
 
-/* The next published function after from whose class is class, holding a
- * reference, as drivers/pci/search.c's: it drops from's. Only the functions
- * Stela's owners publish are found; the rest of the bus is theirs. */
+/* Functions other owners keep, which Linux code may find and identify but
+ * not configure or bind (stela_linux_pci_publish_identity). */
+static LIST_HEAD(identities);
+
+static int refuse_read(struct pci_bus *bus, unsigned int devfn, int where, int size, u32 *value)
+{
+	(void)bus;
+	(void)devfn;
+	(void)where;
+	(void)size;
+	*value = ~0U;
+	return PCIBIOS_DEVICE_NOT_FOUND;
+}
+
+static int refuse_write(struct pci_bus *bus, unsigned int devfn, int where, int size, u32 value)
+{
+	(void)bus;
+	(void)devfn;
+	(void)where;
+	(void)size;
+	(void)value;
+	return PCIBIOS_DEVICE_NOT_FOUND;
+}
+
+static struct pci_ops identity_ops = {.read = refuse_read, .write = refuse_write};
+
+int stela_linux_pci_publish_identity(const struct stela_linux_pci_identity *identity)
+{
+	struct pci_bus *bus = kzalloc_obj(*bus);
+	struct pci_dev *dev = kzalloc_obj(*dev);
+
+	if (!bus || !dev) {
+		kfree(bus);
+		kfree(dev);
+		return -ENOMEM;
+	}
+	bus->number = identity->bus;
+	bus->ops = &identity_ops;
+	dev->bus = bus;
+	dev->devfn = identity->devfn;
+	dev->vendor = identity->vendor;
+	dev->device = identity->device;
+	dev->subsystem_vendor = identity->subsystem_vendor;
+	dev->subsystem_device = identity->subsystem_device;
+	dev->class = identity->class;
+	dev->revision = identity->revision;
+	/* The list keeps this first reference for the boot. */
+	device_initialize(&dev->dev);
+	dev->dev.bus = &pci_bus_type;
+	list_add_tail(&dev->bus_list, &identities);
+	return 0;
+}
+
+/* The next function after from whose class is class, holding a reference,
+ * as drivers/pci/search.c's: it drops from's. Found are the functions
+ * Stela's owners publish, then the identities other owners keep; the rest of
+ * the bus is not Linux code's. */
 struct pci_dev *pci_get_class(unsigned int class, struct pci_dev *from)
 {
-	struct pci_dev *dev = from ? list_next_entry(from, bus_list) :
-				     list_first_entry(&devices, struct pci_dev, bus_list);
-	struct pci_dev *found = NULL;
+	struct list_head *lists[] = {&devices, &identities};
+	struct pci_dev *dev, *found = NULL;
+	bool after = !from;
 
-	for (; !list_entry_is_head(dev, &devices, bus_list); dev = list_next_entry(dev, bus_list))
-		if (dev->class == class) {
-			found = pci_dev_get(dev);
-			break;
+	for (size_t i = 0; i < ARRAY_SIZE(lists) && !found; i++)
+		list_for_each_entry(dev, lists[i], bus_list) {
+			if (!after) {
+				after = dev == from;
+			} else if (dev->class == class) {
+				found = pci_dev_get(dev);
+				break;
+			}
 		}
 	pci_dev_put(from);
 	return found;
@@ -654,7 +712,27 @@ int main(void)
 	assert(!pci_get_class(PCI_CLASS_BRIDGE_ISA << 8, &dev));
 	assert(kref_read(&dev.dev.kobj.kref) == references);
 	assert(!pci_get_class(PCI_CLASS_DISPLAY_VGA << 8, NULL));
+	/* An identity another owner keeps is found after the published functions,
+	 * and refuses configuration access. */
+	const struct stela_linux_pci_identity bridge = {
+		.bus = 0, .devfn = PCI_DEVFN(0x1f, 0), .vendor = 0x8086, .device = 0x9d4e,
+		.subsystem_vendor = 0x1028, .subsystem_device = 0x081c,
+		.class = PCI_CLASS_BRIDGE_ISA << 8, .revision = 0x21,
+	};
+	assert(!stela_linux_pci_publish_identity(&bridge));
+	struct pci_dev *isa = pci_get_class(PCI_CLASS_BRIDGE_ISA << 8, NULL);
+	assert(isa == &dev);
+	isa = pci_get_class(PCI_CLASS_BRIDGE_ISA << 8, isa);
+	assert(isa && isa->vendor == 0x8086 && isa->device == 0x9d4e && isa->revision == 0x21);
+	assert(isa->subsystem_device == 0x081c && isa->devfn == PCI_DEVFN(0x1f, 0));
+	assert(pci_read_config_dword(isa, 0, &value) == PCIBIOS_DEVICE_NOT_FOUND && value == ~0U);
+	assert(!pci_get_class(PCI_CLASS_BRIDGE_ISA << 8, isa));
+	assert(kref_read(&dev.dev.kobj.kref) == references);
 	list_del(&dev.bus_list);
+	/* With nothing published, the identity alone is found. */
+	isa = pci_get_class(PCI_CLASS_BRIDGE_ISA << 8, NULL);
+	assert(isa && isa->device == 0x9d4e);
+	pci_dev_put(isa);
 
 	/* A page from the start of a two-page memory BAR; nothing past its end. */
 	dev.resource[2].start = 0xc0000000;
