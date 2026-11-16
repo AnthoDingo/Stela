@@ -244,6 +244,7 @@ fn traps() -> BTreeSet<String> {
         for (marker, field) in [
             ("STELA_UNSUPPORTED(", 1),
             ("STELA_UNSUPPORTED_OBJECT(", 1),
+            ("STELA_UNSUPPORTED_ALIAS(", 0),
             ("stela_linux_unsupported(\"", 0),
         ] {
             for definition in text.split(marker).skip(1) {

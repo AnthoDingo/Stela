@@ -13,6 +13,16 @@
 	ret name(__VA_ARGS__) { __builtin_trap(); } \
 	_Pragma("clang diagnostic pop")
 
+/* Define a function Linux declares as a trap, of the type of that
+ * declaration, for a file of many such services: an alias of
+ * stela_linux_unreached, which the same file defines and which takes no
+ * argument, as a trap reads none. The declaration's header must be included. */
+#define STELA_UNSUPPORTED_ALIAS(name) \
+	_Pragma("clang diagnostic push") \
+	_Pragma("clang diagnostic ignored \"-Wattribute-alias\"") \
+	extern __typeof__(name) name __attribute__((alias("stela_linux_unreached"))); \
+	_Pragma("clang diagnostic pop")
+
 /* Define an object that only unreached code uses. It holds no data. */
 #define STELA_UNSUPPORTED_OBJECT(type, name) type name = {0}
 
