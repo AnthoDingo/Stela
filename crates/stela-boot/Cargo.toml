@@ -34,9 +34,12 @@ native-profile = ["stela-soc/native-profile", "stela-engine/native-profile"]
 # The image's DRM driver, one of: nouveau for NVIDIA GPUs, or i915 for Intel
 # graphics version 9 (`--no-default-features --features intel`).
 nouveau = ["stela-drivers/nouveau-port"]
-intel = ["stela-drivers/i915-port"]
+intel = ["stela-drivers/i915-port", "drm-client"]
+# The guest's display and Stela's console on a bound GPU's output, through
+# DRM calls posted to the Linux environment (`engine/gpu/client.rs`).
+drm-client = ["stela-drivers/metal"]
 # NVK, NIR and NAK in the image, from `cargo xtask gpu nvk`.
-nvk = ["nouveau", "dep:stela-mesa", "stela-drivers/metal-linked"]
+nvk = ["nouveau", "drm-client", "dep:stela-mesa", "stela-drivers/metal-linked"]
 
 [dependencies]
 stela-linux = { path = "../stela-linux", features = ["kernel"] }

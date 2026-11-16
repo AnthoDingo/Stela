@@ -10,11 +10,11 @@
 //! ([`pump_due`]), so other PEs do not spin on a lock while Linux runs and
 //! GPU completions are not starved. Nothing reserves a core, and a Linux
 //! environment with nothing to do costs the boot PE one comparison a slice.
-#[cfg(feature = "nvk")]
+#[cfg(feature = "drm-client")]
 pub(super) mod client;
-#[cfg(feature = "nvk")]
+#[cfg(feature = "drm-client")]
 pub(super) mod display;
-#[cfg(feature = "nvk")]
+#[cfg(feature = "drm-client")]
 mod file;
 #[cfg(feature = "nvk")]
 pub(super) mod gate;
@@ -26,7 +26,7 @@ mod kext {
         "/../../target/guest/StelaGPU.kext.rs"
     ));
 }
-#[cfg(feature = "nvk")]
+#[cfg(feature = "drm-client")]
 mod stack;
 #[cfg(feature = "nvk")]
 mod waiter;
@@ -129,9 +129,9 @@ const PCIE_CAPABILITY: u8 = 0x10;
 /// `PCI_EXP_LNKSTA`, in the PCIe capability.
 #[cfg(feature = "nvk")]
 const LINK_STATUS: u16 = 0x12;
-#[cfg(feature = "nvk")]
+#[cfg(feature = "drm-client")]
 const REVISION: u16 = 0x08;
-#[cfg(feature = "nvk")]
+#[cfg(feature = "drm-client")]
 const SUBSYSTEM_ID: u16 = 0x2c;
 /// Linux's `IORESOURCE_*` bits of a memory BAR.
 const RESOURCE_MEMORY: u64 = 0x200;
@@ -157,7 +157,7 @@ const PUMP_NS: u64 = 2_000_000;
 static HUB: AtomicPtr<Hub> = AtomicPtr::new(ptr::null_mut());
 static BOOT_PE: AtomicUsize = AtomicUsize::new(0);
 /// The processor the environment runs on.
-#[cfg(feature = "nvk")]
+#[cfg(feature = "drm-client")]
 static BOOT_CPU: AtomicU32 = AtomicU32::new(0);
 
 /// End the boot PE's slices for Linux, through `hub`.
@@ -1037,7 +1037,7 @@ pub(super) struct Claimed {
     placement: Placement,
     bars: Vec<Range<u64>>,
     name: String,
-    #[cfg(feature = "nvk")]
+    #[cfg(feature = "drm-client")]
     drm: client::DrmDevice,
     #[cfg(feature = "nvk")]
     link: Option<PcieLink>,
@@ -1210,7 +1210,7 @@ fn claim(
         .iter()
         .find(|(_, id)| *id == MSI_CAPABILITY)
         .map(|(offset, _)| Msi::at(u16::from(*offset)));
-    #[cfg(feature = "nvk")]
+    #[cfg(feature = "drm-client")]
     let drm = {
         let config = function.config();
         let subsystem = config.read32(SUBSYSTEM_ID).map_err(ServiceError::Config)?;
@@ -1251,7 +1251,7 @@ fn claim(
         placement,
         bars,
         name: format!("{address}"),
-        #[cfg(feature = "nvk")]
+        #[cfg(feature = "drm-client")]
         drm,
         #[cfg(feature = "nvk")]
         link,
@@ -1550,11 +1550,12 @@ pub(super) fn claim_all(
     (claimed, refused)
 }
 
-/// A GPU nouveau bound.
-#[cfg(feature = "nvk")]
+/// A GPU the image's DRM driver bound.
+#[cfg(feature = "drm-client")]
 struct Bound {
     name: String,
     drm: client::DrmDevice,
+    #[cfg(feature = "nvk")]
     link: Option<PcieLink>,
 }
 
@@ -1569,7 +1570,7 @@ struct Start {
 
 struct Started {
     _attached: Vec<Attached<Device>>,
-    #[cfg(feature = "nvk")]
+    #[cfg(feature = "drm-client")]
     bound: Vec<Bound>,
     result: Result<(), Errno>,
 }
@@ -1597,7 +1598,7 @@ fn start(
     stela_boot_core::heap::set_peak_hook(gate::peak_passed);
     let mut job = Started {
         _attached: Vec::new(),
-        #[cfg(feature = "nvk")]
+        #[cfg(feature = "drm-client")]
         bound: Vec::new(),
         result: Ok(()),
     };
@@ -1667,10 +1668,11 @@ fn start(
             Ok(attached) => {
                 // SAFETY: entered.
                 if unsafe { attached.bound() } {
-                    #[cfg(feature = "nvk")]
+                    #[cfg(feature = "drm-client")]
                     job.bound.push(Bound {
                         name: claimed.name,
                         drm: claimed.drm,
+                        #[cfg(feature = "nvk")]
                         link: claimed.link,
                     });
                 } else {
@@ -1692,7 +1694,7 @@ fn start(
 
 /// The running environment.
 #[cfg_attr(
-    not(feature = "nvk"),
+    not(feature = "drm-client"),
     allow(
         dead_code,
         reason = "held for the boot; only Mesa's client reads these"
@@ -1706,20 +1708,20 @@ struct Installed {
     /// When the service is next due, as a TSC value: the clock reads only
     /// in the Linux environment's root, and the boot loop asks outside it.
     next: AtomicU64,
-    #[cfg(feature = "nvk")]
+    #[cfg(feature = "drm-client")]
     window: &'static Window,
     tsc_hz: u64,
-    #[cfg(feature = "nvk")]
+    #[cfg(feature = "drm-client")]
     libc_clock: client::LibcClock,
-    #[cfg(feature = "nvk")]
+    #[cfg(feature = "drm-client")]
     heap_bytes: u64,
     /// Clients' mappings with their sizes in pages, by address. For tasks.
-    #[cfg(feature = "nvk")]
+    #[cfg(feature = "drm-client")]
     mappings: RefCell<BTreeMap<u64, (stela_linux::client::Mapping, usize)>>,
     /// Mesa's running threads, by the bottom of their stacks. On the boot CPU.
-    #[cfg(feature = "nvk")]
+    #[cfg(feature = "drm-client")]
     mesa_threads: RefCell<BTreeMap<u64, client::Running>>,
-    #[cfg(feature = "nvk")]
+    #[cfg(feature = "drm-client")]
     service: client::Service,
     owner: &'static Arc<LinuxKernel>,
     threads: &'static LinuxThreads,
@@ -1753,7 +1755,7 @@ pub(super) struct Machine {
     pub tsc_hz: u64,
     pub wall: Option<RtcReading>,
     /// The host heap capacity reported to the linked graphics runtime.
-    #[cfg(feature = "nvk")]
+    #[cfg(feature = "drm-client")]
     pub heap_bytes: u64,
     /// The ISA bridges i915 identifies the PCH by, shown to Linux identity
     /// only before i915 starts.
@@ -1795,10 +1797,10 @@ pub(super) fn kexts() -> Vec<stela_loader::aux_kc::Kext<'static>> {
 /// function that showed the firmware's picture, `None` when there was a
 /// picture whose function is unknown.
 pub(super) fn serve(
-    #[cfg_attr(not(feature = "nvk"), allow(unused_variables))] screen: Option<(usize, usize)>,
-    #[cfg_attr(not(feature = "nvk"), allow(unused_variables))] firmware: Option<&str>,
+    #[cfg_attr(not(feature = "drm-client"), allow(unused_variables))] screen: Option<(usize, usize)>,
+    #[cfg_attr(not(feature = "drm-client"), allow(unused_variables))] firmware: Option<&str>,
 ) {
-    #[cfg(feature = "nvk")]
+    #[cfg(feature = "drm-client")]
     {
         let shown = match (screen, firmware) {
             (None, _) => display::Shown::Nothing,
@@ -1806,8 +1808,9 @@ pub(super) fn serve(
             (Some(_), Some(function)) => display::Shown::By(function),
         };
         display::take(screen.unwrap_or((0, 0)), shown);
-        gate::open_service();
     }
+    #[cfg(feature = "nvk")]
+    gate::open_service();
 }
 
 /// Bring Linux up over `claimed`, and return once nouveau has bound them or
@@ -1821,7 +1824,7 @@ pub(super) fn open(machine: Machine, claimed: Vec<Claimed>) -> Result<(), Error>
         random,
         tsc_hz,
         wall,
-        #[cfg(feature = "nvk")]
+        #[cfg(feature = "drm-client")]
         heap_bytes,
         #[cfg(feature = "intel")]
         isa_bridges,
@@ -1846,7 +1849,7 @@ pub(super) fn open(machine: Machine, claimed: Vec<Claimed>) -> Result<(), Error>
         .collect();
     let clock = work.service_clock().map_err(environment_error)?;
     let epoch = clock.epoch().map_err(environment_error)?;
-    #[cfg(feature = "nvk")]
+    #[cfg(feature = "drm-client")]
     let libc_clock = client::LibcClock::anchor(|| epoch.now_ns()).map_err(environment_error)?;
     let time = clock.clock();
     let events = Arc::new(Events {
@@ -1903,7 +1906,7 @@ pub(super) fn open(machine: Machine, claimed: Vec<Claimed>) -> Result<(), Error>
         stela_linux::image::register(image).map_err(|_| kernel_work::Error::Inventory)?;
         stela_linux::heap::register(allocate_zeroed).map_err(|_| kernel_work::Error::Inventory)?;
     }
-    #[cfg(feature = "nvk")]
+    #[cfg(feature = "drm-client")]
     BOOT_CPU.store(host::processor(), Ordering::Relaxed);
     let (owner, threads, job) = work.dispatch_linux(|runtime| {
         Ok(mount_and_start(
@@ -1933,18 +1936,18 @@ pub(super) fn open(machine: Machine, claimed: Vec<Claimed>) -> Result<(), Error>
         domain,
         // Due at once: the first pump finds Linux's own deadline.
         next: AtomicU64::new(0),
-        #[cfg(feature = "nvk")]
+        #[cfg(feature = "drm-client")]
         window,
         tsc_hz,
-        #[cfg(feature = "nvk")]
+        #[cfg(feature = "drm-client")]
         libc_clock,
-        #[cfg(feature = "nvk")]
+        #[cfg(feature = "drm-client")]
         heap_bytes,
-        #[cfg(feature = "nvk")]
+        #[cfg(feature = "drm-client")]
         mappings: RefCell::new(BTreeMap::new()),
-        #[cfg(feature = "nvk")]
+        #[cfg(feature = "drm-client")]
         mesa_threads: RefCell::new(BTreeMap::new()),
-        #[cfg(feature = "nvk")]
+        #[cfg(feature = "drm-client")]
         service: client::Service::default(),
         owner,
         threads,
@@ -2264,9 +2267,9 @@ static UNMAPS: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
 pub(super) enum Unmapped {
     Device,
     Pages,
-    #[cfg_attr(not(feature = "nvk"), allow(dead_code))]
+    #[cfg_attr(not(feature = "drm-client"), allow(dead_code))]
     Files,
-    #[cfg_attr(not(feature = "nvk"), allow(dead_code))]
+    #[cfg_attr(not(feature = "drm-client"), allow(dead_code))]
     Stacks,
 }
 
@@ -2298,13 +2301,13 @@ static PUMPS: PumpCounts = PumpCounts {
 };
 
 /// Ticks the boot CPU spent in posted pumps ([`pump_posted`]).
-#[cfg(feature = "nvk")]
+#[cfg(feature = "drm-client")]
 static POSTED_TICKS: AtomicU64 = AtomicU64::new(0);
 
 /// The ticks this processor spent in posted pumps so far: the boot CPU's
 /// total, and nothing on another processor, which runs none.
 pub(super) fn posted_ticks_here() -> u64 {
-    #[cfg(feature = "nvk")]
+    #[cfg(feature = "drm-client")]
     if host::processor() == BOOT_CPU.load(Ordering::Relaxed) {
         return POSTED_TICKS.load(Ordering::Relaxed);
     }
@@ -2313,9 +2316,9 @@ pub(super) fn posted_ticks_here() -> u64 {
 
 /// The shootdowns counted so far, for a difference across a step.
 fn shootdowns() -> u64 {
-    #[cfg(feature = "nvk")]
+    #[cfg(feature = "drm-client")]
     return crate::native_mmio::shootdown::count();
-    #[cfg(not(feature = "nvk"))]
+    #[cfg(not(feature = "drm-client"))]
     0
 }
 
@@ -2435,18 +2438,18 @@ pub(super) fn pump() {
             }
             // Tasks retire and calls arrive only through steps and posts:
             // a pump's first pass looks only if something may have.
-            #[cfg(feature = "nvk")]
+            #[cfg(feature = "drm-client")]
             if !first || client::start_due() {
                 gpu.advance_children();
                 client::start(gpu)?;
             }
-            #[cfg(not(feature = "nvk"))]
+            #[cfg(not(feature = "drm-client"))]
             gpu.advance_children();
             first = false;
             lap(PumpPart::Children);
-            #[cfg(feature = "nvk")]
+            #[cfg(feature = "drm-client")]
             let serving = client::serving();
-            #[cfg(not(feature = "nvk"))]
+            #[cfg(not(feature = "drm-client"))]
             let serving = [0; 4];
             let (step_started, shot) = (host::rdtsc(), shootdowns());
             let stepped = runtime.step()?;
@@ -2516,7 +2519,7 @@ pub(super) fn pump() {
 /// polls): an AP waiting for a DRM call waits for the boot CPU, not for that
 /// work. Nothing runs elsewhere, or with no call posted.
 pub(super) fn pump_posted() {
-    #[cfg(feature = "nvk")]
+    #[cfg(feature = "drm-client")]
     if client::posted_waiting() && host::processor() == BOOT_CPU.load(Ordering::Relaxed) {
         PUMPS.posted.fetch_add(1, Ordering::Relaxed);
         let started = host::rdtsc();

@@ -1369,7 +1369,7 @@ fn open_gpus(
         return false;
     }
     let tsc_hz = handoff.tsc_hz;
-    #[cfg(feature = "nvk")]
+    #[cfg(feature = "drm-client")]
     let heap_bytes = heap.end - heap.start;
     crate::status::begin("Starting the GPU");
     let gop = if handoff.screen.is_some() {
@@ -1437,7 +1437,7 @@ fn open_gpus(
         random,
         tsc_hz,
         wall: handoff.wall,
-        #[cfg(feature = "nvk")]
+        #[cfg(feature = "drm-client")]
         heap_bytes,
         #[cfg(feature = "intel")]
         isa_bridges,
@@ -1555,19 +1555,19 @@ fn place_devices(
     // wrapped to keep one for `--scanout-mirror`. With neither a GPU's
     // display nor the firmware's screen, which a bound GPU's reset ended, the
     // guest keeps that screen's mode and a GPU's display found later shows it.
-    #[cfg(feature = "nvk")]
+    #[cfg(feature = "drm-client")]
     let mirrored = |scanout: alloc::boxed::Box<dyn stela_soc::machine::Scanout>| match options
         .scanout_mirror
     {
         true => alloc::boxed::Box::new(display::MirroredScanout::new(scanout)) as _,
         false => scanout,
     };
-    #[cfg(feature = "nvk")]
+    #[cfg(feature = "drm-client")]
     let scanout = gpu::display::scanout()
         .map(mirrored)
         .or_else(firmware_scanout)
         .or_else(|| gpu::display::awaited(handoff.screen?).map(mirrored));
-    #[cfg(not(feature = "nvk"))]
+    #[cfg(not(feature = "drm-client"))]
     let scanout = firmware_scanout();
     let programmed = mount::memory_locks(placement.read_only_region, core_locks);
     let memory = board.and_then(|board| memory_resources(board, canonical_ram, programmed));

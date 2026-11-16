@@ -17,6 +17,16 @@
 //! that waits in the C library comes through `stela_libc_wait`: a PE services
 //! shootdowns and spins, the boot CPU also runs the environment, and a task
 //! thread sleeps.
+//!
+//! The Intel image, without Mesa yet, uses only the DRM calls Stela's own
+//! display makes.
+#![cfg_attr(
+    not(feature = "nvk"),
+    allow(
+        dead_code,
+        reason = "Mesa, the Metal service and the GPU reports use the rest"
+    )
+)]
 use super::{
     BOOT_CPU, Installed, PAGE, installed,
     stack::{self, Stack},
@@ -435,6 +445,7 @@ unsafe fn perform(gpu: &Installed, operation: Operation) -> i64 {
                 let gpu = installed().expect("requests are posted to a running environment");
                 // A completion waiter's file is a nouveau client: freed after
                 // the stop began, its RM objects outlive GSP's unload.
+                #[cfg(feature = "nvk")]
                 if !super::waiter::wait_gone() {
                     output::arguments(format_args!(
                         "GPU completion waiter still open at the stop\n"
@@ -1491,7 +1502,11 @@ unsafe extern "C" fn stela_libc_wait(word: *const c_uint, value: c_uint, deadlin
         return hint::spin_loop();
     };
     let Some(thread) = current_thread(gpu) else {
+        // Only Mesa's threads and the Metal service's PEs wait here.
+        #[cfg(feature = "nvk")]
         return super::gate::relax();
+        #[cfg(not(feature = "nvk"))]
+        return hint::spin_loop();
     };
     let sleeping = &SLEEPING[thread.core as usize - PROCESSORS];
     sleeping.store(word.cast_mut(), Ordering::SeqCst);
