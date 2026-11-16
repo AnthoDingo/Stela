@@ -25,6 +25,9 @@ struct State {
     /// A bus reset is offered, and whether it fails.
     bus_reset: bool,
     fail_bus_reset: bool,
+    /// The views stop the GPU's engines, and whether that fails.
+    stops_engines: bool,
+    fail_engines: bool,
 }
 struct Config {
     words: Box<[u32; 128]>,
@@ -152,6 +155,19 @@ unsafe impl Views<Config> for OldViews {
         assert!(!state.panic_views, "CPU writer interrupted");
         if state.fail_views {
             Err(ViewError::Busy)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn quiesce_engines(&mut self) -> Result<(), ViewError> {
+        let mut state = self.0.borrow_mut();
+        if !state.stops_engines {
+            return Ok(());
+        }
+        state.events.push("engines-stop");
+        if state.fail_engines {
+            Err(ViewError::Engines)
         } else {
             Ok(())
         }
@@ -539,4 +555,35 @@ fn a_function_of_another_vendor_than_the_caller_drives_is_refused() {
     inputs.vendor = 0x8086;
     let failed = failure(Cold::new(inputs).quiesce_and_bind());
     assert_eq!(failed.error, Error::Identity);
+}
+
+#[test]
+fn engines_stop_after_the_views_seal_and_before_the_function_reset() {
+    let (inputs, state) = inputs();
+    state.borrow_mut().stops_engines = true;
+    {
+        let _ready = Cold::new(inputs)
+            .quiesce_and_bind()
+            .unwrap_or_else(|error| panic!("{:?}", error.error));
+        assert_eq!(
+            state.borrow().events,
+            ["views-seal", "engines-stop", "flr", "root-drain", "bind"]
+        );
+    }
+    kept(&state.borrow());
+}
+
+#[test]
+fn engines_that_do_not_stop_refuse_the_gpu_before_any_reset() {
+    let (inputs, state) = inputs();
+    {
+        let mut state = state.borrow_mut();
+        state.stops_engines = true;
+        state.fail_engines = true;
+    }
+    let failed = failure(Cold::new(inputs).quiesce_and_bind());
+    assert_eq!(failed.error, Error::Views(ViewError::Engines));
+    assert_eq!(state.borrow().events, ["views-seal", "engines-stop"]);
+    drop(failed);
+    kept(&state.borrow());
 }

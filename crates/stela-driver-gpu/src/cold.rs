@@ -26,6 +26,8 @@ pub enum ViewError {
     Retired,
     RegisterReadback,
     ForeignSource,
+    /// The GPU's engines did not stop ([`Views::quiesce_engines`]).
+    Engines,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -69,6 +71,14 @@ pub enum Reset {
 /// Timing and operations are admitted only on the original process/CPU context.
 pub unsafe trait Views<C: ConfigSpace>: 'static {
     fn seal(&mut self, function: &mut Function<C>) -> Result<(), ViewError>;
+    /// Stop what firmware left the GPU's engines running, through its own
+    /// registers, after [`Views::seal`] and before the function's reset; an
+    /// error refuses the GPU before any reset. Nothing by default: nouveau
+    /// starts what the reset leaves. Intel's engines are stopped and reset
+    /// first (`intel_quiesce`), so no reset cuts a batch mid-write.
+    fn quiesce_engines(&mut self) -> Result<(), ViewError> {
+        Ok(())
+    }
 }
 
 /// An original requester/root, or an explicitly unsafe diagnostic peer.
@@ -271,6 +281,7 @@ impl<P: Preparation, V: Views<P::Config>> Cold<P, V> {
                 .views
                 .seal(requester.function_mut())
                 .map_err(Error::Views)?;
+            attempt.views.quiesce_engines().map_err(Error::Views)?;
             let timer = attempt.timer.as_ref();
             match reset {
                 Some(Reset::Function(method)) => {
