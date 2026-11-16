@@ -575,6 +575,9 @@ const BLANK: Cell = Cell {
     color: Color::Text,
 };
 
+/// Stela's version, shown in the loading screen's corner.
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 /// The text grid and what the screen shows of it.
 struct Text {
     screen: Framebuffer,
@@ -659,9 +662,7 @@ impl Text {
         let Some(_access) = self.screen.use_screen() else {
             return;
         };
-        let s = self.scale;
-        let (on_width, on_height) = (self.font.width * s, self.font.height * s);
-        let off = self.screen.encoding.encode(ui::BACKGROUND);
+        let (on_width, on_height) = (self.font.width * self.scale, self.font.height * self.scale);
         for index in 0..self.cells.len() {
             let cell = self.cells[index];
             if cell == self.shown[index] {
@@ -670,21 +671,48 @@ impl Text {
             self.shown[index] = cell;
             let x = self.left + index % self.columns * on_width;
             let y = self.top + index / self.columns * on_height;
-            let on = self.screen.pixel(cell.color);
-            for row in 0..on_height {
-                let line = (self.screen.base + (y + row) * self.screen.stride * BYTES_PER_PIXEL)
-                    as *mut u32;
-                for column in 0..on_width {
-                    let value = if self.font.pixel(cell.character, column / s, row / s) {
-                        on
-                    } else {
-                        off
-                    };
-                    // SAFETY: the grid and its margins lie inside the mode's
-                    // visible framebuffer.
-                    unsafe { line.add(x + column).write_volatile(value) };
-                }
+            self.glyph(x, y, cell.character, cell.color);
+        }
+    }
+
+    /// Draw one character with its top left at screen pixel (`x`, `y`).
+    fn glyph(&self, x: usize, y: usize, character: u8, color: Color) {
+        let s = self.scale;
+        let (on_width, on_height) = (self.font.width * s, self.font.height * s);
+        let off = self.screen.encoding.encode(ui::BACKGROUND);
+        let on = self.screen.pixel(color);
+        for row in 0..on_height {
+            let line =
+                (self.screen.base + (y + row) * self.screen.stride * BYTES_PER_PIXEL) as *mut u32;
+            for column in 0..on_width {
+                let value = if self.font.pixel(character, column / s, row / s) {
+                    on
+                } else {
+                    off
+                };
+                // SAFETY: callers keep the glyph inside the grid or its
+                // margins, which lie inside the mode's visible framebuffer.
+                unsafe { line.add(x + column).write_volatile(value) };
             }
+        }
+    }
+
+    /// Show Stela's version in the bottom right corner, in the margin row
+    /// under the grid (which [`Text::new`] keeps free), flush with the
+    /// grid's right edge. Skipped when it does not fit across the grid.
+    fn stamp_version(&self) {
+        let version = VERSION.as_bytes();
+        if version.len() > self.columns {
+            return;
+        }
+        let Some(_access) = self.screen.use_screen() else {
+            return;
+        };
+        let cell_width = self.font.width * self.scale;
+        let y = self.screen.height - self.font.height * self.scale;
+        let x = self.left + (self.columns - version.len()) * cell_width;
+        for (index, &character) in version.iter().enumerate() {
+            self.glyph(x + index * cell_width, y, printable(character), Color::Dim);
         }
     }
 }
@@ -732,6 +760,9 @@ pub fn install(screen: Framebuffer) {
         if screen.available() {
             screen.clear();
             *active = Text::new(screen);
+            if let Some(text) = active.as_ref() {
+                text.stamp_version();
+            }
             *parked = None;
         }
     });
@@ -783,6 +814,7 @@ pub fn reclaim() {
         {
             text.screen.clear();
             text.shown.fill(BLANK);
+            text.stamp_version();
             text.present();
             *active = Some(text);
         }
