@@ -480,12 +480,11 @@ const OPEN: &[(&str, &[&str])] = &[
         "x86 traps",
         &["kernel_fpu_begin", "kernel_fpu_end", "wbinvd_on_all_cpus"],
     ),
-    // Reserving stolen memory, which i915 skips while the environment reports
-    // none (`intel_graphics_stolen_res`, `init_stolen_smem`). Phase 3 decides
-    // whether the Intel claim reports it, and with it this reservation.
-    // So is mapping objects without struct pages, which are stolen or local
-    // memory (`i915_gem_object_map_pfn`).
-    ("stolen memory", &["__devm_request_region", "vmap_pfn"]),
+    // Mapping objects without struct pages, stolen or local memory, for the
+    // CPU (`i915_gem_object_map_pfn`): version 9's stolen objects are the
+    // GPU's own (scratch, scanout, FBC), and with an LLC its rings are
+    // internal objects (`gt/intel_ring.c`, `create_ring_vma`).
+    ("CPU maps of stolen memory", &["vmap_pfn"]),
     // Writing shmem objects out, which i915 asks for only from kswapd and on
     // hibernation (`gem/i915_gem_shrinker.c`); Stela has neither.
     (

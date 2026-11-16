@@ -1041,6 +1041,9 @@ pub(super) struct Claimed {
     drm: client::DrmDevice,
     #[cfg(feature = "nvk")]
     link: Option<PcieLink>,
+    /// An Intel GPU's stolen memory: its start and bytes.
+    #[cfg(feature = "intel")]
+    stolen: Option<(u64, u64)>,
 }
 
 fn claim(
@@ -1153,6 +1156,8 @@ fn claim(
     #[cfg(feature = "intel")]
     let (registers, engines, firmware) =
         intel_views(services, &resources[0], adapter, catalog, timer.clone())?;
+    #[cfg(feature = "intel")]
+    let stolen = intel_stolen(function).map_err(ServiceError::Config)?;
     crate::host_inventory::text(
         alloc::format!("GPU{line}PCIID"),
         alloc::format!("{VENDOR:04x}:{:04x}", adapter.device),
@@ -1255,6 +1260,8 @@ fn claim(
         drm,
         #[cfg(feature = "nvk")]
         link,
+        #[cfg(feature = "intel")]
+        stolen,
     })
 }
 
@@ -1289,6 +1296,25 @@ fn nvidia_views(
         crate::host_inventory::text(alloc::format!("GPU{line}Chip"), chip.name);
     }
     Ok((registers, Engines::Nvidia { boot0 }, firmware))
+}
+
+/// An Intel GPU's stolen memory, as x86's early quirks read it for graphics
+/// version 9 (`arch/x86/kernel/early-quirks.c`, `gen9_stolen_size` and
+/// `intel_stolen_base`): the size from `GMCH_CTRL`'s GMS field, 32 MiB steps
+/// below 0xf0 and 4 MiB steps from 4 MiB above, at BDSM's bits 31:20.
+/// `None` when firmware gave it none.
+#[cfg(feature = "intel")]
+fn intel_stolen(function: &mut Function<OwnedConfig>) -> Result<Option<(u64, u64)>, ConfigError> {
+    const GMCH_CTRL: u16 = 0x50;
+    const BDSM: u16 = 0x5c;
+    let gms = u64::from(function.config().read16(GMCH_CTRL)? >> 8);
+    let size = if gms < 0xf0 {
+        gms << 25
+    } else {
+        (gms - 0xf0 + 1) << 22
+    };
+    let base = u64::from(function.config().read32(BDSM)? & 0xfff0_0000);
+    Ok((size != 0 && base != 0).then_some((base, size)))
 }
 
 /// An admitted Intel GPU's registers, read-write as far as its quiesce
@@ -1623,6 +1649,19 @@ fn start(
             // SAFETY: entered, on a task.
             unsafe { stela_linux::function::publish_identity(&identity) }
         });
+        if job.result.is_ok()
+            && let Some((start, size)) = claimed.first().and_then(|claimed| claimed.stolen)
+        {
+            output::arguments(format_args!(
+                "GPU stolen memory: {:#x}..{:#x}
+",
+                start,
+                start + size
+            ));
+            // SAFETY: entered, on a task, before i915 starts; the claimed
+            // GPU's own stolen memory, which firmware reserved.
+            job.result = unsafe { gpu::i915::report_stolen(start, size) };
+        }
         if job.result.is_ok() {
             // SAFETY: entered, on a task.
             job.result = unsafe { gpu::i915::start() };

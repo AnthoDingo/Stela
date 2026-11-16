@@ -112,9 +112,8 @@ STELA_UNSUPPORTED_ALIAS(pci_d3cold_enable)
 STELA_UNSUPPORTED_ALIAS(int_sqrt)
 STELA_UNSUPPORTED_ALIAS(device_create_bin_file)
 STELA_UNSUPPORTED_ALIAS(device_remove_bin_file)
-/* Stolen and local memory, which the environment reports none of, and
- * objects without struct pages that only they back. */
-STELA_UNSUPPORTED_ALIAS(__devm_request_region)
+/* CPU maps of objects without struct pages, which on version 9 back only
+ * what the GPU alone reads and writes. */
 STELA_UNSUPPORTED_ALIAS(vmap_pfn)
 /* Writing shmem objects out, which i915 does only from kswapd and on
  * hibernation. */

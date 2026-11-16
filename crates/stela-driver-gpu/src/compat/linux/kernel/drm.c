@@ -4,13 +4,28 @@
  * x86's early quirks record for i915. */
 #include <linux/ioport.h>
 #include <drm/intel/i915_drm.h>
+#include <stela/device.h>
 #include <video/cmdline.h>
 #include <video/nomodeset.h>
 
 /* Intel graphics' stolen memory, which arch/x86/kernel/early-quirks.c reads
  * from the GPU's configuration space. Empty, as Linux leaves it when it finds
- * none: i915 then skips its stolen region (init_stolen_smem). */
+ * none, until the Intel claim reports it: i915 then skips its stolen region
+ * (init_stolen_smem). */
 struct resource intel_graphics_stolen_res = DEFINE_RES_MEM(0, 0);
+
+/* Not in the format test's program, which supplies its own printk. */
+#ifndef STELA_LINUX_DRM_FORMAT_TEST
+int stela_linux_intel_stolen(u64 start, u64 size)
+{
+	/* i915 requests the range for itself (request_smem_stolen). */
+	int error = stela_linux_lend_region(start, size);
+
+	if (!error)
+		intel_graphics_stolen_res = (struct resource)DEFINE_RES_MEM(start, size);
+	return error;
+}
+#endif
 
 bool video_firmware_drivers_only(void)
 {
