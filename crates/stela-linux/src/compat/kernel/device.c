@@ -13,6 +13,7 @@
 #include <linux/component.h>
 #include <linux/device.h>
 #include <linux/err.h>
+#include <linux/ioport.h>
 #include <linux/kobject.h>
 #include <linux/mutex.h>
 #include <linux/property.h>
@@ -239,6 +240,73 @@ void component_del(struct device *dev, const struct component_ops *ops)
 	(void)ops;
 }
 
+/* Physical ranges owners lent Linux code; each holds at most one request. */
+struct lent_region {
+	struct list_head node;
+	u64 start, end;
+	bool requested;
+};
+static LIST_HEAD(lent_regions);
+
+int stela_linux_lend_region(u64 start, u64 size)
+{
+	struct lent_region *region = kzalloc_obj(*region);
+
+	if (!size || start + size - 1 < start)
+		return -EINVAL;
+	if (!region)
+		return -ENOMEM;
+	region->start = start;
+	region->end = start + size - 1;
+	list_add_tail(&region->node, &lent_regions);
+	return 0;
+}
+
+struct requested_region {
+	struct resource resource;
+	struct lent_region *lent;
+};
+
+static void return_lent_region(void *data)
+{
+	struct requested_region *requested = data;
+
+	requested->lent->requested = false;
+	kfree(requested);
+}
+
+/* kernel/resource.c's, for memory an owner lent: the request succeeds when it
+ * lies within one lent range not already requested, and is released with the
+ * driver. Anything else is busy, as Linux reports a conflict. */
+struct resource *__devm_request_region(struct device *dev, struct resource *parent,
+				       resource_size_t start, resource_size_t n, const char *name)
+{
+	struct lent_region *lent;
+
+	if (parent != &iomem_resource || !n || start + n - 1 < start)
+		return NULL;
+	list_for_each_entry(lent, &lent_regions, node) {
+		if (start < lent->start || start + n - 1 > lent->end)
+			continue;
+		if (lent->requested)
+			return NULL;
+		struct requested_region *requested = kzalloc_obj(*requested);
+
+		if (!requested)
+			return NULL;
+		requested->resource = (struct resource)DEFINE_RES_NAMED(
+			start, n, name, IORESOURCE_MEM | IORESOURCE_BUSY);
+		requested->lent = lent;
+		if (__devm_add_action(dev, return_lent_region, requested, "region")) {
+			kfree(requested);
+			return NULL;
+		}
+		lent->requested = true;
+		return &requested->resource;
+	}
+	return NULL;
+}
+
 /* Runtime power dependencies, which only a bound audio component makes and
  * removes. */
 STELA_UNSUPPORTED(struct device_link *, device_link_add, struct device *, struct device *, u32)
@@ -329,6 +397,14 @@ int main(void)
 	assert(!__devm_add_action(&child, undo, (void *)&c, "c"));
 	devm_release_action(&child, undo, (void *)&b);
 	assert(undone_count == 1 && undone[0] == 'b');
+	/* Lent memory is requested once, inside its range, and comes back with
+	 * the driver; other memory is busy. */
+	assert(!stela_linux_lend_region(0x7d800000, 0x2000000));
+	assert(!__devm_request_region(&child, &iomem_resource, 0x7d000000, 0x1000, "x"));
+	struct resource *region =
+		__devm_request_region(&child, &iomem_resource, 0x7d800000, 0x2000000, "stolen");
+	assert(region && region->start == 0x7d800000 && region->end == 0x7f7fffff);
+	assert(!__devm_request_region(&child, &iomem_resource, 0x7d801000, 0x1000, "again"));
 	device_unregister(&child);
 	assert(!memcmp(undone, "bca", 3));
 	put_device(&child);
