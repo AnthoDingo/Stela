@@ -833,8 +833,16 @@ enum Engines {
     Intel {
         timer: Rc<dyn stela_drivers::bus::pci::power::Timer>,
         name: String,
+        /// BLC_PWM_PCH_CTL2 as firmware left it, read before the reset,
+        /// which clears it (`stela_boot_core::backlight::inherited`).
+        backlight: Option<u32>,
     },
 }
+
+/// BLC_PWM_PCH_CTL2's offset in an Intel GPU's registers.
+#[cfg(feature = "intel")]
+const BACKLIGHT_CTL2: usize =
+    stela_boot_core::backlight::CTL1 as usize + stela_boot_core::backlight::CTL2_FROM_CTL1;
 
 fn gpu_pci_words(function: &mut Function<OwnedConfig>) -> Result<[u32; 8], ConfigError> {
     // Identity and class/revision, then all six restored BAR registers.
@@ -859,12 +867,17 @@ unsafe impl gpu::cold::Views<OwnedConfig> for GpuViews {
     }
 
     fn quiesce_engines(&mut self) -> Result<(), gpu::cold::ViewError> {
-        match &self.engines {
+        match &mut self.engines {
             #[cfg(feature = "nouveau")]
             Engines::Nvidia { .. } => Ok(()),
             #[cfg(feature = "intel")]
-            Engines::Intel { timer, name } => {
+            Engines::Intel {
+                timer,
+                name,
+                backlight,
+            } => {
                 let registers = &self.registers;
+                *backlight = registers.read32(BACKLIGHT_CTL2).ok();
                 let result = gpu::intel_quiesce::quiesce(
                     |offset| {
                         registers
@@ -1215,6 +1228,33 @@ fn claim(
     {
         wait_for_firmware_boot(services, &resources[0], chip)?;
     }
+    #[cfg(feature = "intel")]
+    if let Engines::Intel {
+        backlight: Some(before),
+        ..
+    } = views.engines
+    {
+        use stela_boot_core::backlight::{duty, inherited, period};
+        let after = views
+            .registers
+            .read32(BACKLIGHT_CTL2)
+            .map_err(ServiceError::Mapping)?;
+        let restored = inherited(before, after);
+        if let Some(level) = restored {
+            views
+                .registers
+                .write32(BACKLIGHT_CTL2, level)
+                .map_err(ServiceError::Mapping)?;
+        }
+        output::arguments(format_args!(
+            "GPU {address}: backlight PWM {}/{} before the reset, {}/{} after{}\n",
+            duty(before),
+            period(before),
+            duty(after),
+            period(after),
+            if restored.is_some() { ", firmware's level restored" } else { "" }
+        ));
+    }
     // SAFETY: this scoped BAR observation was the sole user of the UC mapping.
     unsafe { views.registers.retire() }.map_err(ServiceError::Mapping)?;
     let capabilities = function
@@ -1362,7 +1402,15 @@ fn intel_views(
     )
     .map_err(|_| ServiceError::Refused("the GPU firmware name is invalid"))?;
     let name = format!("{}", adapter.address);
-    Ok((registers, Engines::Intel { timer, name }, firmware))
+    Ok((
+        registers,
+        Engines::Intel {
+            timer,
+            name,
+            backlight: None,
+        },
+        firmware,
+    ))
 }
 
 /// Read one BAR0 register through a scoped read-only page of `registers`,

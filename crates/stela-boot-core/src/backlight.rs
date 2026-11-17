@@ -53,6 +53,16 @@ pub fn step(ctl2: u32, up: bool) -> u32 {
     (ctl2 & !0xffff) | next
 }
 
+/// CTL2 to write back after the GPU's reset: what firmware left (`before`),
+/// when it had a period and the reset left none (`after`). i915 starts the
+/// panel at the duty it reads (`lpt_setup_backlight`), as Linux inherits it
+/// from firmware without resetting the GPU, so a cleared CTL2 lights the
+/// panel at 0.
+pub fn inherited(before: u32, after: u32) -> Option<u32> {
+    (period(before) != 0 && duty(before) <= period(before) && period(after) == 0)
+        .then_some(before)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -104,5 +114,15 @@ mod tests {
         assert_eq!(duty(level), 468);
         // A tiny period still moves.
         assert_eq!(duty(step((8 << 16) | 4, true)), 5);
+    }
+
+    #[test]
+    fn firmwares_level_returns_only_where_the_reset_cleared_the_period() {
+        assert_eq!(inherited(LATITUDE_7490, 0), Some(LATITUDE_7490));
+        assert_eq!(inherited(LATITUDE_7490, 3764), Some(LATITUDE_7490));
+        // The reset kept it, or firmware left nothing sound to return.
+        assert_eq!(inherited(LATITUDE_7490, LATITUDE_7490), None);
+        assert_eq!(inherited(0, 0), None);
+        assert_eq!(inherited((100 << 16) | 101, 0), None);
     }
 }
