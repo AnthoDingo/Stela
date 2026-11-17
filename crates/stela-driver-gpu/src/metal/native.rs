@@ -3392,3 +3392,53 @@ impl NativeBackend {
         unsafe { self.device.get_buffer_device_address(&info) }
     }
 }
+
+/// The physical devices the driver behind `get_instance_proc_addr`
+/// enumerates, each as its name, Vulkan version, driver version and PCI
+/// identity, through an instance created and destroyed here. For a driver
+/// the image carries before a Metal device opens over it.
+///
+/// # Safety
+/// `get_instance_proc_addr` is a Vulkan driver's loader entry.
+pub unsafe fn enumerate(
+    get_instance_proc_addr: vk::PFN_vkGetInstanceProcAddr,
+) -> core::result::Result<Vec<alloc::string::String>, vk::Result> {
+    let static_fn = ash::StaticFn {
+        get_instance_proc_addr,
+    };
+    // SAFETY: the caller guarantees the entry point.
+    let entry = unsafe { ash::Entry::from_static_fn(static_fn) };
+    let application = vk::ApplicationInfo::default()
+        .application_name(c"Stela Metal")
+        .engine_name(c"Stela")
+        .api_version(vk::API_VERSION_1_3);
+    let info = vk::InstanceCreateInfo::default().application_info(&application);
+    // SAFETY: the create info and its application info outlive the call.
+    let instance = unsafe { entry.create_instance(&info, None) }?;
+    // SAFETY: the instance was just created.
+    let devices = unsafe { instance.enumerate_physical_devices() }.map(|devices| {
+        devices
+            .into_iter()
+            .map(|physical| {
+                // SAFETY: `physical` came from this instance.
+                let properties = unsafe { instance.get_physical_device_properties(physical) };
+                let version = properties.api_version;
+                format!(
+                    "{}: Vulkan {}.{}.{}, driver {:#x}, {:04x}:{:04x}",
+                    properties
+                        .device_name_as_c_str()
+                        .map_or("?".into(), |name| name.to_string_lossy()),
+                    vk::api_version_major(version),
+                    vk::api_version_minor(version),
+                    vk::api_version_patch(version),
+                    properties.driver_version,
+                    properties.vendor_id,
+                    properties.device_id,
+                )
+            })
+            .collect()
+    });
+    // SAFETY: nothing made from the instance outlives it.
+    unsafe { instance.destroy_instance(None) };
+    devices
+}

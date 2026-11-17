@@ -1,32 +1,44 @@
-//! Links the archive `cargo xtask gpu nvk` builds.
+//! Links the archives `cargo xtask gpu nvk` or `anv` builds, by the feature.
 use std::{env, path::PathBuf};
 
 fn main() {
+    let anv = env::var_os("CARGO_FEATURE_ANV").is_some();
+    let driver = if anv { "anv" } else { "nvk" };
     let manifest = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("set by Cargo"));
-    let directory = manifest.join("../../target/gpu/nvk");
-    println!("cargo:rustc-link-search=native={}", directory.display());
+    let directory = manifest.join("../../target/gpu").join(driver);
+    // LLVM and libc++ are every driver's, where `llvm::build` puts them.
+    let llvm = manifest.join("../../target/gpu/nvk");
     // Mesa links its Vulkan runtime and drivers whole: their entry points
     // meet in tables by weak reference, which pulls no member from an archive.
-    for (name, kind) in [
-        ("stela-vulkan", "static:+whole-archive"),
-        ("stela-nvk", "static"),
-        ("stela-llvm", "static"),
+    let lazy = format!("stela-{driver}");
+    for (name, kind, at) in [
+        ("stela-vulkan", "static:+whole-archive", &directory),
+        (lazy.as_str(), "static", &directory),
+        ("stela-llvm", "static", &llvm),
     ] {
-        let archive = directory.join(format!("lib{name}.a"));
+        let archive = at.join(format!("lib{name}.a"));
         assert!(
             archive.is_file(),
-            "{} is missing: run `cargo xtask gpu nvk`",
+            "{} is missing: run `cargo xtask gpu {driver}`",
             archive.display()
         );
+        println!("cargo:rustc-link-search=native={}", at.display());
         println!("cargo:rerun-if-changed={}", archive.display());
         println!("cargo:rustc-link-lib={kind}={name}");
     }
-    // What turns NIR into machine code: the C archives (NVK, NIR and the
-    // Vulkan runtime) and the Rust NAK and NIL build from, with the
-    // toolchain. NVK's own pipeline cache UUID is the same for every build
+    // What turns NIR into machine code: the C archives (the driver, NIR and
+    // the Vulkan runtime), NVK's Rust NAK and NIL, and the toolchain. The
+    // driver's own pipeline cache UUID is the same for every build
     // (`compat/mesa/build_id.c`), so this keys the pipeline store instead.
-    stela_fingerprint::emit(
-        "STELA_MESA_COMPILER_SHA256",
+    let sources: &[&str] = if anv {
+        &[
+            ".",
+            "../../target/gpu/anv/libstela-anv.a",
+            "../../target/gpu/anv/libstela-vulkan.a",
+            "../../third_party/mesa/src/intel/compiler",
+            "../../rust-toolchain.toml",
+        ]
+    } else {
         &[
             ".",
             "../../target/gpu/nvk/libstela-nvk.a",
@@ -42,6 +54,7 @@ fn main() {
             "../../third_party/mesa/src/nouveau/nil",
             "../../third_party/mesa/src/nouveau/rust",
             "../../rust-toolchain.toml",
-        ],
-    );
+        ]
+    };
+    stela_fingerprint::emit("STELA_MESA_COMPILER_SHA256", sources);
 }

@@ -1,13 +1,18 @@
-//! NVK, NIR and NAK, linked into `stela.efi` for its Metal device.
+//! Mesa's Vulkan driver, linked into `stela.efi` for its Metal device: NVK,
+//! NIR and NAK (feature `nvk`), or ANV, NIR and brw (feature `anv`).
 //!
-//! The C is the archive `cargo xtask gpu nvk` builds; the Rust is NAK and NIL
-//! as dependencies of this crate. Nothing but the drivers' loader entries and
-//! the start of the C is called from here: Mesa reaches its host through
-//! `compat/libc`, and the Metal compiler is `metal::compiler`'s.
+//! The C is the archive `cargo xtask gpu nvk` or `anv` builds; NVK's Rust is
+//! NAK and NIL as dependencies of this crate. Nothing but the driver's loader
+//! entry and the start of the C is called from here: Mesa reaches its host
+//! through `compat/libc`, and the Metal compiler is `metal::compiler`'s.
 #![no_std]
 
+#[cfg(feature = "nvk")]
 extern crate nak;
+#[cfg(feature = "nvk")]
 extern crate nil;
+#[cfg(all(feature = "nvk", feature = "anv"))]
+compile_error!("an image carries one Vulkan driver: `nvk` or `anv`");
 
 use core::ffi::{c_char, c_void};
 

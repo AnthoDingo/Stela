@@ -10,6 +10,8 @@
 //! ([`pump_due`]), so other PEs do not spin on a lock while Linux runs and
 //! GPU completions are not starved. Nothing reserves a core, and a Linux
 //! environment with nothing to do costs the boot PE one comparison a slice.
+#[cfg(feature = "anv")]
+mod anv;
 #[cfg(feature = "drm-client")]
 pub(super) mod client;
 #[cfg(feature = "drm-client")]
@@ -1892,7 +1894,9 @@ pub(super) fn no_metal_device() -> Option<&'static str> {
     return gate::shared()
         .is_empty()
         .then_some("no GPU started; the lines above say why");
-    #[cfg(not(feature = "nvk"))]
+    #[cfg(feature = "anv")]
+    return Some("the Metal device over ANV is not built yet (the Intel port's Phase 5)");
+    #[cfg(not(any(feature = "nvk", feature = "anv")))]
     Some("this stela.efi was built without GPU drivers (the `nvk` feature)")
 }
 
@@ -1926,6 +1930,8 @@ pub(super) fn serve(
         };
         display::take(screen.unwrap_or((0, 0)), shown);
     }
+    #[cfg(feature = "anv")]
+    anv::probe();
     #[cfg(feature = "nvk")]
     gate::open_service();
 }

@@ -4,7 +4,7 @@ version = "0.0.0"
 edition = "2024"
 publish = false
 license = "GPL-2.0-or-later AND MIT AND Apache-2.0 WITH LLVM-exception"
-description = "Mesa's NVK, NIR and NAK, linked into stela.efi"
+description = "Mesa's Vulkan driver (NVK with NAK, or ANV), linked into stela.efi"
 repository = "https://github.com/tylertms/Stela"
 rust-version = "1.99"
 build = "build.rs"
@@ -12,9 +12,15 @@ build = "build.rs"
 # A workspace of none: this crate and the ones it names build only for
 # `stela.efi`, from sources `cargo xtask gpu nvk` generates.
 
+# The driver the image carries, one of: NVK with NAK and NIL (`cargo xtask
+# gpu nvk`), or ANV (`cargo xtask gpu anv`).
+[features]
+nvk = ["dep:nak", "dep:nil"]
+anv = []
+
 [dependencies]
-nak = { package = "stela-mesa-nak", path = "nak" }
-nil = { package = "stela-mesa-nil", path = "nil" }
+nak = { package = "stela-mesa-nak", path = "nak", optional = true }
+nil = { package = "stela-mesa-nil", path = "nil", optional = true }
 
 [build-dependencies]
 stela-fingerprint = { path = "../stela-fingerprint" }
