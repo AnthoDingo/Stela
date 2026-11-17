@@ -215,7 +215,8 @@ const OBJECTS: &[&str] = &[
     "display/intel_display_conversion",
     "display/intel_display_driver",
     "display/intel_display_irq",
-    "display/intel_display_params",
+    // display/intel_display_params: src/compat/i915/intel_display_params.c,
+    // with the values Stela gives the parameters.
     "display/intel_display_power",
     "display/intel_display_power_map",
     "display/intel_display_power_well",
@@ -522,9 +523,11 @@ const INITCALLS: UnitSpec = UnitSpec {
 
 pub fn port(linux: &mut Linux) {
     println!("cargo:rerun-if-changed={I915}");
+    println!("cargo:rerun-if-changed=src/compat/i915");
     let sources = OBJECTS
         .iter()
         .map(|object| Path::new(I915).join(format!("{object}.c")))
+        .chain([PathBuf::from("src/compat/i915/intel_display_params.c")])
         .collect::<Vec<PathBuf>>();
     port::build(
         linux,
