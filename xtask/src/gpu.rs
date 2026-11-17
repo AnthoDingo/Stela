@@ -99,6 +99,13 @@ pub enum Command {
         #[arg(long, default_value_t = 8, value_parser = clap::value_parser!(u16).range(1..))]
         jobs: u16,
     },
+    /// Compile ANV, NIR and `brw` for `stela.efi` against Stela's C library,
+    /// for an Intel image (`cargo xtask boot build --intel`).
+    Anv {
+        /// Maximum parallel native compiler processes.
+        #[arg(long, default_value_t = 8, value_parser = clap::value_parser!(u16).range(1..))]
+        jobs: u16,
+    },
     /// Differential testing of the Metal stack: plan the suite's assertions,
     /// prove them on a Mac, carry them to a guest and check its results.
     #[command(subcommand)]
@@ -141,6 +148,7 @@ pub fn run(command: Command) -> Result<()> {
         }),
         // `stela.efi` carries the kext it links against each boot's kernel.
         Command::Nvk { jobs } => build_nvk(jobs),
+        Command::Anv { jobs } => build_anv(jobs),
         Command::MetalSuite(command) => metal_suite::run(command),
         Command::Llvm { jobs, test } => llvm::build(&toolchain::discover()?, jobs, test),
     }
@@ -152,8 +160,13 @@ pub fn default_jobs() -> u16 {
     std::thread::available_parallelism().map_or(1, |cpus| cpus.get().min(8) as u16)
 }
 
+/// Prepare ANV's archive, for an Intel image.
+pub fn build_anv(jobs: u16) -> Result<()> {
+    nvk::build(jobs, &nvk::ANV)
+}
+
 /// Prepare the complete native rendering archive and its guest components.
 pub fn build_nvk(jobs: u16) -> Result<()> {
-    nvk::build(jobs)?;
+    nvk::build(jobs, &nvk::NVK)?;
     crate::guest::run()
 }

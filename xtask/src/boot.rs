@@ -500,6 +500,7 @@ pub fn run(command: Command) -> Result<ExitCode> {
         } => {
             crate::gpu::fetch::fetch(false)?;
             let image = if intel {
+                crate::gpu::build_anv(crate::gpu::default_jobs())?;
                 Image::Intel
             } else {
                 crate::gpu::build_nvk(crate::gpu::default_jobs())?;
@@ -524,7 +525,7 @@ enum Image {
     Nouveau,
     /// nouveau with NVK.
     Nvk,
-    /// i915 alone (`stela-boot`'s `intel` feature).
+    /// i915 with ANV (`stela-boot`'s `anv` feature).
     Intel,
 }
 
@@ -567,7 +568,7 @@ fn build_with_diagnostics(release: bool, diagnostics: bool, image: Image) -> Res
     match image {
         Image::Nouveau => &mut command,
         Image::Nvk => command.args(["--features", "nvk"]),
-        Image::Intel => command.args(["--no-default-features", "--features", "intel"]),
+        Image::Intel => command.args(["--no-default-features", "--features", "anv"]),
     };
     if release {
         command.arg("--release");

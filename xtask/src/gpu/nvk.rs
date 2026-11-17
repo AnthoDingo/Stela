@@ -59,10 +59,134 @@ pub(super) const OPTIONS: [&str; 21] = [
 /// size, which `ralloc_total_size` sums for the Metal compiler's NIR budget.
 /// The block header is private to the unit and its size is the same either way.
 const SIZED_UNIT: &str = "src/util/ralloc.c";
-/// The Vulkan drivers the image links, as Meson's targets.
-const DRIVERS: [&str; 1] = ["src/nouveau/vulkan/libvulkan_nouveau.so"];
-/// Tools the configuration asks for that nothing runs.
+/// Tools the configuration asks for that nothing runs: the OpenCL kernels
+/// they would build are each driver's stand-in ([`Driver::not_generated`]).
 const UNUSED_TOOLS: [&str; 2] = ["mesa_clc", "vtn_bindgen2"];
+
+/// A Vulkan driver of Mesa's this task builds for the image, by what differs
+/// from one to another. One image carries one (`stela-mesa`'s features).
+pub(super) struct Driver {
+    /// Its directory under `target/gpu`, and its archive's name.
+    pub(super) name: &'static str,
+    /// Meson's `vulkan-drivers`, and the options added to [`OPTIONS`].
+    vulkan: &'static str,
+    options: &'static [&'static str],
+    /// The drivers the image links, as Meson's targets.
+    targets: &'static [&'static str],
+    /// The libraries Meson links whole, by their objects' names.
+    whole: &'static [&'static str],
+    /// Units not built, by a part of their source path: each either has a
+    /// stand-in in `compat/mesa`, or needs what the image lacks and nothing
+    /// here calls it.
+    skipped: &'static [&'static str],
+    /// Stela's stand-ins, under `compat/mesa`, built with
+    /// [`Self::model_unit`]'s flags.
+    stand_ins: &'static [&'static str],
+    /// A driver unit whose flags reach the driver's headers.
+    model_unit: &'static str,
+    /// Generated sources not built, by a part of their path: the OpenCL
+    /// kernels a stand-in replaces.
+    not_generated: &'static [&'static str],
+    /// Whether it carries Mesa's Rust (NAK and NIL), whose bindings this
+    /// task generates.
+    rust: bool,
+    /// Whether the Metal compiler service ([`AIR`]) is built with it.
+    air: bool,
+}
+
+impl Driver {
+    /// Meson's options for it: [`OPTIONS`], its `vulkan-drivers` and its own.
+    fn options(&self) -> Vec<String> {
+        OPTIONS
+            .iter()
+            .map(|option| match option.strip_prefix("-Dvulkan-drivers=") {
+                Some(_) => format!("-Dvulkan-drivers={}", self.vulkan),
+                None => (*option).to_owned(),
+            })
+            .chain(self.options.iter().map(|option| (*option).to_owned()))
+            .collect()
+    }
+}
+
+/// NVIDIA's NVK, with NAK.
+pub(super) const NVK: Driver = Driver {
+    name: "nvk",
+    vulkan: "nouveau",
+    options: &[],
+    targets: &["src/nouveau/vulkan/libvulkan_nouveau.so"],
+    whole: &[
+        "libvulkan_lite_runtime_a",
+        "libvulkan_runtime_a",
+        "libvulkan_instance_a",
+        "libnvk_a",
+    ],
+    skipped: &[
+        "nvkcl",
+        "build_id",
+        "nv_cubin.c",
+        "texcompress_astc",
+        "u_qsort",
+        "os_file_notify",
+        "os_socket",
+        "disk_cache",
+        "mesa_cache_db",
+        "u_debug_stack",
+        "wsi_common_display",
+    ],
+    stand_ins: &[
+        "nvkcl",
+        "build_id",
+        "nv_cubin",
+        "drm",
+        "soft_float",
+        "nir_options",
+        "submit_thread",
+    ],
+    model_unit: "nvk_query_pool.c",
+    not_generated: &["nvkcl"],
+    rust: true,
+    air: true,
+};
+
+/// Intel's ANV, with `brw`, for graphics version 9 and later. No ray
+/// tracing, which needs version 12.5; no ELK, the compiler of version 8
+/// and before. Its OpenCL kernels are `compat/mesa/anvcl.c`, and BLORP's
+/// (its blits, clears and copies) `compat/mesa/blorpcl.c`.
+pub(super) const ANV: Driver = Driver {
+    name: "anv",
+    vulkan: "intel",
+    options: &["-Dintel-rt=disabled", "-Dintel-elk=false"],
+    targets: &["src/intel/vulkan/libvulkan_intel.so"],
+    whole: &[
+        "libvulkan_lite_runtime_a",
+        "libvulkan_runtime_a",
+        "libvulkan_instance_a",
+        "libanv_common_a",
+        "libanv_per_hw_ver",
+    ],
+    skipped: &[
+        "_shaders_binding",
+        "blorp_shaders",
+        "build_id",
+        "u_qsort",
+        "os_file_notify",
+        "os_socket",
+        "disk_cache",
+        "mesa_cache_db",
+        "u_debug_stack",
+        "wsi_common_display",
+    ],
+    stand_ins: &["anvcl", "blorpcl", "build_id", "drm"],
+    model_unit: "anv_internal_kernels.c",
+    not_generated: &[
+        "_shaders.spv",
+        "_shaders_binding",
+        "blorp_shaders",
+        "float64_spv",
+    ],
+    rust: false,
+    air: false,
+};
 /// What Mesa's configuration asks of `glslangValidator`, only for the compute
 /// shaders that build acceleration structures and decode ASTC in Vulkan's
 /// runtime. The device enables neither, as no Metal path uses them, so they
@@ -86,39 +210,6 @@ if "--depfile" in arguments:
 const LIBDRM_VERSION: &str = "2.4.133";
 const LIBELF_VERSION: &str = "0.190";
 
-/// Units not built, by a part of their source path: each either has a stand-in
-/// in `compat/mesa`, or needs what the image lacks and nothing here calls it.
-/// The libraries Meson links whole, by their objects' names.
-const WHOLE_LIBRARIES: [&str; 4] = [
-    "libvulkan_lite_runtime_a",
-    "libvulkan_runtime_a",
-    "libvulkan_instance_a",
-    "libnvk_a",
-];
-
-const SKIPPED: [&str; 11] = [
-    "nvkcl",
-    "build_id",
-    "nv_cubin.c",
-    "texcompress_astc",
-    "u_qsort",
-    "os_file_notify",
-    "os_socket",
-    "disk_cache",
-    "mesa_cache_db",
-    "u_debug_stack",
-    "wsi_common_display",
-];
-/// Stela's stand-ins, under `compat/mesa`, built with an NVK unit's flags.
-const STAND_INS: [&str; 7] = [
-    "nvkcl",
-    "build_id",
-    "nv_cubin",
-    "drm",
-    "soft_float",
-    "nir_options",
-    "submit_thread",
-];
 /// The Metal compiler service, under `compiler`, built with an NVK unit's flags.
 const AIR: [&str; 16] = [
     "air_call",
@@ -138,7 +229,6 @@ const AIR: [&str; 16] = [
     "metal_compiler",
     "threadgroup",
 ];
-const MODEL_UNIT: &str = "nvk_query_pool.c";
 /// The C library, under `compat/libc`.
 pub(super) const LIBC: [&str; 6] = ["libc", "stdio", "pthread", "math", "system", "wchar"];
 /// Original LLVM units behind `compat/libc/regex.h`, also present in the
@@ -270,6 +360,7 @@ fn setup(
     directory: &Path,
     build: &Path,
     path: &Path,
+    driver: &Driver,
 ) -> Result<()> {
     let packages = directory.join("pkgconfig");
     let machine = directory.join("machine.ini");
@@ -318,7 +409,7 @@ fn setup(
         .arg(third_party("mesa"))
         .arg("--cross-file")
         .arg(machine)
-        .args(OPTIONS)
+        .args(driver.options())
         .env("PATH", path);
     // Rust on Windows does not link through the C compiler Meson finds.
     if cfg!(windows) {
@@ -384,7 +475,13 @@ fn missing_probes(commands: &str) -> Result<Vec<&'static str>> {
 }
 
 /// Every source Meson generates, and the structured copy of the compiler crate.
-fn generate(sysroot: &Sysroot, build: &Path, path: &Path, libclang: &Path) -> Result<()> {
+fn generate(
+    sysroot: &Sysroot,
+    build: &Path,
+    path: &Path,
+    libclang: &Path,
+    driver: &Driver,
+) -> Result<()> {
     let ninja = tool("ninja", GENERATORS)?;
     let mut targets = BTreeSet::new();
     for rule in ["CUSTOM_COMMAND", "CUSTOM_COMMAND_DEP"] {
@@ -404,7 +501,7 @@ fn generate(sysroot: &Sysroot, build: &Path, path: &Path, libclang: &Path) -> Re
             .then(|| target.to_owned())
     }));
     targets.retain(|target| {
-        !target.contains("nvkcl")
+        !driver.not_generated.iter().any(|part| target.contains(part))
             && ![
                 "all",
                 "test",
@@ -424,12 +521,18 @@ fn generate(sysroot: &Sysroot, build: &Path, path: &Path, libclang: &Path) -> Re
         .iter()
         .map(|argument| format!("\"{}\"", argument.replace('\\', "/")))
         .collect();
+    // Unix's `fcntl`, which `src/intel/compiler/gen/gen_inst_info.py`
+    // imports and never uses: Python on Windows has none.
+    let modules = build.with_file_name("python");
+    fs::create_dir_all(&modules)?;
+    fs::write(modules.join("fcntl.py"), "")?;
     exec(
         Command::new(&ninja)
             .args(&targets)
             .current_dir(build)
             .env("BINDGEN_EXTRA_CLANG_ARGS", quoted.join(" "))
             .env("LIBCLANG_PATH", libclang)
+            .env("PYTHONPATH", &modules)
             .env("PATH", path),
     )
 }
@@ -588,11 +691,12 @@ fn units(
     path: &Path,
     common: &[String],
     cxx: &[String],
+    driver: &Driver,
 ) -> Result<Vec<Unit>> {
     let linked = capture(
         Command::new(ninja)
             .args(["-t", "inputs"])
-            .args(DRIVERS)
+            .args(driver.targets)
             .current_dir(build)
             .env("PATH", path),
     )?;
@@ -608,7 +712,11 @@ fn units(
     // A source two libraries compile is the one's that is linked whole.
     let whole: BTreeSet<&str> = entries
         .iter()
-        .filter(|entry| entry["output"].as_str().is_some_and(linked_whole))
+        .filter(|entry| {
+            entry["output"]
+                .as_str()
+                .is_some_and(|output| linked_whole(driver, output))
+        })
         .filter_map(|entry| entry["file"].as_str())
         .collect();
     for entry in entries {
@@ -619,20 +727,21 @@ fn units(
             continue;
         };
         let output = &words[at + 1];
-        if !linked.contains(output.as_str()) || (whole.contains(file) && !linked_whole(output)) {
+        if !linked.contains(output.as_str()) || (whole.contains(file) && !linked_whole(driver, output)) {
             continue;
         }
-        if file.ends_with(MODEL_UNIT) {
+        if file.ends_with(driver.model_unit) {
             model = Some((file.to_owned(), words.clone()));
         }
         if file.ends_with(".S")
-            || SKIPPED
+            || driver
+                .skipped
                 .iter()
                 .any(|skip| output.contains(skip) || file.contains(skip))
         {
             continue;
         }
-        let is_cxx = file.ends_with(".cpp");
+        let is_cxx = file.ends_with(".cpp") || file.ends_with(".cc");
         ensure!(
             is_cxx || file.ends_with(".c"),
             "{file} is neither C nor C++"
@@ -678,7 +787,7 @@ fn units(
     };
     let model_unit =
         |source: &Path, name: &str, added: &[String]| like(&file, &words, source, name, added);
-    for name in STAND_INS {
+    for name in driver.stand_ins {
         let source = compat.join("mesa").join(format!("{name}.c"));
         units.push(model_unit(&source, name, &[]));
     }
@@ -690,7 +799,7 @@ fn units(
         gpu(),
     ]
     .map(|include| format!("-I{}", include.display()));
-    for name in AIR {
+    for name in AIR.iter().filter(|_| driver.air) {
         let source = compiler.join(format!("{name}.c"));
         units.push(model_unit(&source, name, &added));
     }
@@ -819,25 +928,27 @@ pub(super) fn gather_constructors(units: &[Unit]) -> Result<()> {
 
 /// Whether Meson links `unit`'s library whole: its entry points are reached
 /// only by weak reference, which pulls no member from an archive.
-fn linked_whole(object: &str) -> bool {
+fn linked_whole(driver: &Driver, object: &str) -> bool {
     let name = object_name(object);
-    WHOLE_LIBRARIES.iter().any(|library| name.contains(library))
+    driver.whole.iter().any(|library| name.contains(library))
 }
 
-pub fn build(jobs: u16) -> Result<()> {
+pub fn build(jobs: u16, driver: &Driver) -> Result<()> {
     let toolchain = super::toolchain::discover()?;
-    let directory = build_directory("nvk");
+    let directory = build_directory(driver.name);
     let build = directory.join("build");
     let (_, path) = paths(&directory)?;
     fs::create_dir_all(&directory)?;
     super::llvm::build(&toolchain, jobs, false)?;
     let sysroot = Sysroot::build(&toolchain, &directory, jobs)?;
-    setup(&toolchain, &sysroot, &directory, &build, &path)?;
-    generate(&sysroot, &build, &path, &toolchain.libclang)?;
+    setup(&toolchain, &sysroot, &directory, &build, &path, driver)?;
+    generate(&sysroot, &build, &path, &toolchain.libclang, driver)?;
     let libc = gpu().join("compat/libc");
     let includes = include_flags(&toolchain.clang, &libc)?;
-    bindings(&build, &path, &includes, &toolchain.libclang)?;
-    check_float_crossings(&build)?;
+    if driver.rust {
+        bindings(&build, &path, &includes, &toolchain.libclang)?;
+        check_float_crossings(&build)?;
+    }
 
     let objects = directory.join("objects");
     fs::create_dir_all(&objects)?;
@@ -847,12 +958,13 @@ pub fn build(jobs: u16) -> Result<()> {
     common.push(format!("-I{}", gpu().join("compat/mesa").display()));
     let ninja = tool("ninja", GENERATORS)?;
     let cxx = super::llvm::cxx_flags(&common);
-    let units = units(&build, &objects, &ninja, &path, &common, &cxx)?;
+    let units = units(&build, &objects, &ninja, &path, &common, &cxx, driver)?;
     compile(&toolchain.clang, &build, &units, jobs)?;
 
     gather_constructors(&units)?;
     let (whole, lazy): (Vec<_>, Vec<_>) = units.iter().partition(|unit| {
         linked_whole(
+            driver,
             &unit
                 .output
                 .file_name()
@@ -860,8 +972,9 @@ pub fn build(jobs: u16) -> Result<()> {
                 .to_string_lossy(),
         )
     });
-    let archive = directory.join("libstela-nvk.a");
-    for (name, members) in [("libstela-vulkan.a", &whole), ("libstela-nvk.a", &lazy)] {
+    let lazy_name = format!("libstela-{}.a", driver.name);
+    let archive = directory.join(&lazy_name);
+    for (name, members) in [("libstela-vulkan.a", &whole), (lazy_name.as_str(), &lazy)] {
         let archive = directory.join(name);
         if archive.is_file() {
             fs::remove_file(&archive)?;
