@@ -141,6 +141,10 @@ pub struct Framebuffer {
     /// screen is a Skylake or Kaby Lake laptop's (`engine::backlight`).
     pub(crate) backlight: Option<usize>,
     pub(crate) pci_source: Option<crate::pci_io::FramebufferSource>,
+    /// The Intel GPU's VBT, read from its OpRegion into reserved pages
+    /// (`host_firmware::vbt`), which the engine hands to i915.
+    #[cfg(feature = "intel")]
+    pub(crate) vbt: Option<crate::handoff::Region>,
 }
 
 impl Framebuffer {
@@ -192,7 +196,7 @@ impl Framebuffer {
         }
         #[cfg(feature = "intel")]
         match crate::pci_io::intel_opregion(handle) {
-            Ok(asls) => crate::host_firmware::vbt::capture(asls),
+            Ok(asls) => screen.vbt = crate::host_firmware::vbt::capture(asls),
             Err(why) => crate::output::arguments(format_args!("DISPLAY no OpRegion: {why}\n")),
         }
         if let Some((registers, ctl2)) = crate::pci_io::intel_backlight(handle) {
@@ -225,6 +229,8 @@ impl Framebuffer {
             flip: None,
             backlight: None,
             pci_source: None,
+            #[cfg(feature = "intel")]
+            vbt: None,
         };
         (framebuffer.stride * framebuffer.height * BYTES_PER_PIXEL <= framebuffer.bytes)
             .then_some(framebuffer)
@@ -246,6 +252,8 @@ impl Framebuffer {
             flip: None,
             backlight: None,
             pci_source: None,
+            #[cfg(feature = "intel")]
+            vbt: None,
         }
     }
 

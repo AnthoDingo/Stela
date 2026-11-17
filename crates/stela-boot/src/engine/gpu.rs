@@ -1674,6 +1674,11 @@ fn start(
                     vbt,
                 )
             };
+            output::arguments(format_args!(
+                "GPU VBT of {} bytes given as the ROM image: {:?}\n",
+                vbt.len(),
+                job.result
+            ));
         }
         if job.result.is_ok()
             && let Some((start, size)) = claimed.first().and_then(|claimed| claimed.stolen)

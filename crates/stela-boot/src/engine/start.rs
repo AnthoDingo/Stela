@@ -270,6 +270,8 @@ fn start(handoff: u64) -> Started {
         .screen
         .map(|screen| screen.relocated(layout::physical(screen.base as u64) as usize));
     super::backlight::install(screen.and_then(|screen| screen.backlight));
+    #[cfg(feature = "intel")]
+    crate::host_firmware::vbt::adopt(screen.and_then(|screen| screen.vbt));
     crate::status::take_screen(screen);
     crate::status::replay(&handoff.history[..handoff.history_bytes]);
     crate::host_inventory::restore(&handoff.host[..handoff.host_bytes.min(handoff.host.len())]);

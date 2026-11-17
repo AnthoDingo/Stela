@@ -6,7 +6,11 @@
 //! VBT lies is i915's rule (`stela_drivers::gpu::opregion`). The GPU's start
 //! hands it to Linux as the GPU's ROM image, which i915 searches for a VBT
 //! when it has none from the OpRegion.
-use crate::output;
+//!
+//! The engine runs a copy of this image taken before the loader ran, so the
+//! VBT crosses in reserved pages the screen's handoff names ([`capture`]),
+//! which the engine adopts ([`adopt`]).
+use crate::{firmware, handoff::Region, layout, output, paging::PAGE};
 use alloc::{vec, vec::Vec};
 use core::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 use stela_boot_core::host_resources::smbios::{Span, grant};
@@ -21,7 +25,7 @@ const SIGNATURE: &[u8; 4] = b"$VBT";
 /// The most a raw VBT may be: i915 maps what RVDS says, Stela copies it.
 const MAX_RAW: usize = 64 * 1024;
 
-/// The VBT [`capture`] kept for the boot, published once.
+/// The VBT the engine [`adopt`]ed, published once.
 static VBT: AtomicPtr<u8> = AtomicPtr::new(core::ptr::null_mut());
 static BYTES: AtomicUsize = AtomicUsize::new(0);
 
@@ -56,18 +60,18 @@ fn read(address: u64, output: &mut [u8]) -> Result<(), &'static str> {
     Ok(())
 }
 
-/// Read the VBT of the OpRegion at `asls` and keep it for the GPU's start,
-/// saying where it came from or why there is none.
-pub(crate) fn capture(asls: u64) {
+/// Read the VBT of the OpRegion at `asls` into reserved pages for the
+/// engine, saying where it came from or why there is none.
+pub(crate) fn capture(asls: u64) -> Option<Region> {
     let mut region = vec![0u8; opregion::SIZE];
     if let Err(why) = read(asls, &mut region) {
         output::arguments(format_args!("DISPLAY OpRegion at {asls:#x}: {why}\n"));
-        return;
+        return None;
     }
     let Some(places) = opregion::locate(asls, region.as_slice().try_into().expect("OpRegion size"))
     else {
         output::arguments(format_args!("DISPLAY OpRegion at {asls:#x}: no OpRegion signature\n"));
-        return;
+        return None;
     };
     // The raw VBT first, when it is one, then mailbox #4, as i915 tries them.
     let raw = places.raw.and_then(|(address, bytes)| {
@@ -87,24 +91,40 @@ pub(crate) fn capture(asls: u64) {
         output::arguments(format_args!(
             "DISPLAY OpRegion {major}.{minor} at {asls:#x}: no VBT\n"
         ));
-        return;
+        return None;
     }
+    let Ok(pages) = firmware::pages(vbt.len().div_ceil(PAGE)) else {
+        output::arguments(format_args!("DISPLAY VBT: no memory to keep it\n"));
+        return None;
+    };
+    // SAFETY: fresh reserved LOADER_DATA pages, identity mapped while boot
+    // services run, written once here before the handoff names them.
+    unsafe { core::ptr::copy_nonoverlapping(vbt.as_ptr(), pages as *mut u8, vbt.len()) };
     output::arguments(format_args!(
         "DISPLAY VBT: {} bytes in OpRegion {major}.{minor} at {asls:#x}, {from}\n",
         vbt.len()
     ));
-    let kept = vbt.leak();
-    BYTES.store(kept.len(), Ordering::Release);
-    VBT.store(kept.as_mut_ptr(), Ordering::Release);
+    Some(Region {
+        physical: pages as u64,
+        bytes: vbt.len() as u64,
+    })
 }
 
-/// The VBT [`capture`] kept, if any.
+/// Publish, in the engine, the VBT the loader [`capture`]d.
+pub(crate) fn adopt(region: Option<Region>) {
+    let Some(region) = region else { return };
+    BYTES.store(region.bytes as usize, Ordering::Release);
+    VBT.store(layout::physical(region.physical) as *mut u8, Ordering::Release);
+}
+
+/// The VBT the engine adopted, if any.
 pub(crate) fn captured() -> Option<&'static [u8]> {
     let pointer = VBT.load(Ordering::Acquire);
     if pointer.is_null() {
         return None;
     }
-    // SAFETY: a leaked allocation published whole by `capture`, never freed or
-    // written again.
+    // SAFETY: the loader's reserved pages, which the engine's permanent
+    // physmap keeps mapped, published whole by `adopt` and never written
+    // again.
     Some(unsafe { core::slice::from_raw_parts(pointer, BYTES.load(Ordering::Acquire)) })
 }
