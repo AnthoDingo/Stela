@@ -19,6 +19,7 @@ pub mod i915;
 
 pub mod cold;
 pub mod intel_quiesce;
+pub mod opregion;
 pub mod nouveau_chip;
 
 #[cfg(feature = "linux-kernel")]

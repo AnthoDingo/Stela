@@ -190,6 +190,10 @@ impl Framebuffer {
                 "DISPLAY presents into a hidden second frame and flips to it\n"
             ));
         }
+        #[cfg(feature = "intel")]
+        if let Some(asls) = crate::pci_io::intel_opregion(handle) {
+            crate::host_firmware::vbt::capture(asls);
+        }
         if let Some((registers, ctl2)) = crate::pci_io::intel_backlight(handle) {
             screen.backlight = Some(registers as usize);
             crate::output::arguments(format_args!(

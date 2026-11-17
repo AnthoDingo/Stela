@@ -15,6 +15,8 @@ use uefi::{
 };
 mod bundle;
 mod smbios;
+#[cfg(feature = "intel")]
+pub(crate) mod vbt;
 mod wifi;
 use stela_drivers::net::wifi::intel::platform::VARIABLE_DESCRIPTORS;
 

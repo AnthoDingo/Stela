@@ -1660,6 +1660,21 @@ fn start(
             // SAFETY: entered, on a task.
             unsafe { stela_linux::function::publish_identity(&identity) }
         });
+        // The VBT the loader read from the OpRegion, as the GPU's ROM image.
+        if job.result.is_ok()
+            && let Some(vbt) = crate::host_firmware::vbt::captured()
+            && let Some(gpu) = claimed.first()
+        {
+            // SAFETY: entered, on a task, before i915 starts; the image lasts
+            // for the boot.
+            job.result = unsafe {
+                stela_linux::function::publish_rom(
+                    gpu.drm.bus,
+                    gpu.drm.slot << 3 | gpu.drm.function,
+                    vbt,
+                )
+            };
+        }
         if job.result.is_ok()
             && let Some((start, size)) = claimed.first().and_then(|claimed| claimed.stolen)
         {

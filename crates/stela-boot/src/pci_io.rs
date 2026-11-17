@@ -373,6 +373,28 @@ pub(crate) fn intel_backlight(handle: Handle) -> Option<(u64, u32)> {
     backlight::usable(ctl1, ctl2).then_some((region.host.start + backlight::CTL1, ctl2))
 }
 
+/// The physical address of the ACPI OpRegion the Intel graphics on GOP
+/// `handle` names in its ASLS register (configuration offset 0xFC), which
+/// i915 reads its VBT from (`display/intel_opregion.c`). `None` for another
+/// device or an unset register.
+#[cfg(feature = "intel")]
+pub(crate) fn intel_opregion(handle: Handle) -> Option<u64> {
+    const INTEL: u16 = 0x8086;
+    const ASLS: u32 = 0xfc;
+    let mut pci = gop_pci(handle)?;
+    let header = pci.read_header().ok()?;
+    if u16::from_le_bytes([header[0], header[1]]) != INTEL || header[0x0b] != 3 {
+        return None;
+    }
+    let mut asls = 0u32;
+    // SAFETY: live boot protocol; EfiPciIoWidthUint32 (2) reads one
+    // configuration register into the local.
+    let read = unsafe {
+        (pci.config_read)(&mut *pci, 2, ASLS, 1, ptr::from_mut(&mut asls).cast())
+    };
+    (read.is_success() && asls != 0).then_some(u64::from(asls))
+}
+
 fn status(value: Status) -> Result<(), Error> {
     if value.is_success() {
         Ok(())
