@@ -24,7 +24,9 @@ unsafe extern "system" fn entry(
     }
 }
 
-/// Runs the image's C constructors, then logs what ANV enumerates.
+/// Logs what ANV enumerates. ANV, NIR and brw have no static constructors,
+/// and without the Metal compiler no LLVM is linked to bring any, so
+/// `stela_constructors`, which refuses an image without one, is not run.
 pub(super) fn probe() {
     let Some(window) = super::installed().map(|installed| installed.window) else {
         return;
@@ -34,8 +36,6 @@ pub(super) fn probe() {
         return;
     };
     let mut body = || {
-        // SAFETY: the one call, before any other of the C's.
-        unsafe { stela_mesa::stela_constructors() };
         // SAFETY: ANV's loader entry, linked into the image.
         match unsafe { native::enumerate(entry) } {
             Ok(devices) if devices.is_empty() => {
