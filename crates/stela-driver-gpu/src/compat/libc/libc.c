@@ -714,10 +714,26 @@ int setpriority(int which, int who, int priority)
 	return 0;
 }
 
+/* pthread.c's, beside the waits it shares. */
+long stela_libc_futex(uint32_t *word, int operation, uint32_t value,
+		      const struct timespec *deadline, uint32_t mask);
+
 long syscall(long number, ...)
 {
 	if (number == SYS_gettid)
 		return gettid();
+	if (number == SYS_futex) {
+		va_list arguments;
+		va_start(arguments, number);
+		uint32_t *word = va_arg(arguments, uint32_t *);
+		int operation = va_arg(arguments, int);
+		uint32_t value = (uint32_t)va_arg(arguments, int);
+		const struct timespec *deadline = va_arg(arguments, const struct timespec *);
+		(void)va_arg(arguments, void *);
+		uint32_t mask = (uint32_t)va_arg(arguments, int);
+		va_end(arguments);
+		return stela_libc_futex(word, operation, value, deadline, mask);
+	}
 	return fail(ENOSYS);
 }
 

@@ -3,6 +3,7 @@
  * thread Mesa starts is a task of the Linux environment on the boot CPU. Each
  * waits its own way in stela_libc_wait: a processor spins, and a task sleeps. */
 #include <errno.h>
+#include <linux/futex.h>
 #include <pthread.h>
 #include <setjmp.h>
 #include <stdlib.h>
@@ -110,6 +111,40 @@ static int deadline_ns(const struct timespec *deadline, uint64_t *until)
 		return EOVERFLOW;
 	*until = seconds * 1000000000 + nanos;
 	return 0;
+}
+
+/* Linux's futex call (`linux/futex.h`), for syscall(): a wake, or a wait
+ * while *word holds value until an absolute monotonic deadline, as Mesa's
+ * util/futex.c asks. As the call returns: 0, or -1 with errno. A wake wakes
+ * every waiter, and a wait may return early, as a futex's may. */
+long stela_libc_futex(uint32_t *word, int operation, uint32_t value,
+		      const struct timespec *deadline, uint32_t mask);
+long stela_libc_futex(uint32_t *word, int operation, uint32_t value,
+		      const struct timespec *deadline, uint32_t mask)
+{
+	int error = ENOSYS;
+	switch (operation & ~FUTEX_PRIVATE_FLAG) {
+	case FUTEX_WAKE:
+		wake(word);
+		return 0;
+	case FUTEX_WAIT_BITSET: {
+		uint64_t until = UINT64_MAX;
+		if (mask != FUTEX_BITSET_MATCH_ANY)
+			break;
+		if (deadline && (error = deadline_ns(deadline, &until)))
+			break;
+		error = EAGAIN;
+		if (__atomic_load_n(word, __ATOMIC_ACQUIRE) != value)
+			break;
+		wait_while(word, (int)value, until);
+		error = ETIMEDOUT;
+		if (until != UINT64_MAX && stela_libc_now_ns() >= until)
+			break;
+		return 0;
+	}
+	}
+	errno = error;
+	return -1;
 }
 
 int pthread_mutex_timedlock(pthread_mutex_t *mutex, const struct timespec *deadline)
