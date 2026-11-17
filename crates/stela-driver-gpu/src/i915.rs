@@ -6,12 +6,7 @@ use core::{
 };
 use stela_linux::owner::Errno;
 
-/// `DRM_UT_KMS`: the categories of `drm.debug` i915's start prints.
-const DRM_DEBUG: core::ffi::c_ulong = 1 << 2;
-
 unsafe extern "C" {
-    /// `drm.debug` (`drm_print.c`): the DRM debug categories printed.
-    static mut __drm_debug: core::ffi::c_ulong;
     static stela_linux_i915_image: c_void;
     fn stela_i915_display_params();
     fn stela_linux_intel_stolen(start: u64, size: u64) -> c_int;
@@ -25,11 +20,8 @@ unsafe extern "C" {
 /// On the canonical Linux owner's original managed task after Initial and
 /// SRCU startup have completed. Initcalls may sleep.
 pub unsafe fn start() -> Result<(), Errno> {
-    // ponytail: modesetting's debug for the panel's bring-up (eDP, its power
-    // sequence, the backlight), always on; a stela.cfg switch once it lights.
-    // SAFETY: the caller's contract: the only Linux task, before DRM starts.
-    unsafe { __drm_debug = DRM_DEBUG };
-    // SAFETY: as above, before i915 copies its display parameters.
+    // SAFETY: the caller's contract: the only Linux task, before i915 copies
+    // its display parameters.
     unsafe { stela_i915_display_params() };
     let mut registry = ptr::null_mut();
     // SAFETY: the caller's contract; the image is the build's, and the
