@@ -271,6 +271,7 @@ struct pci_dev *stela_linux_pci_attach(const struct stela_linux_pci_function *fu
 		dev->resource[i].flags = region->flags;
 	}
 	dev->dev.dma_mask = &dev->dma_mask;
+	dev->dev.dma_parms = &dev->dma_parms;
 	dev->dev.coherent_dma_mask = DMA_BIT_MASK(32);
 	dev->dev.release = release;
 	set_dma_ops(&dev->dev, &mapping_ops);
@@ -409,6 +410,9 @@ int main(void)
 	/* A mask must cover what the owner hands out. */
 	assert(dma_set_mask(&dev->dev, DMA_BIT_MASK(39)) == -EIO);
 	assert(!dma_set_mask(&dev->dev, DMA_BIT_MASK(47)));
+	/* A driver may set its maximum segment size, as on any PCI device. */
+	dma_set_max_seg_size(&dev->dev, UINT_MAX);
+	assert(dma_get_max_seg_size(&dev->dev) == UINT_MAX);
 
 	dma_addr_t address = dma_map_phys(&dev->dev, 0x2000, 0x100, DMA_TO_DEVICE, 0);
 
