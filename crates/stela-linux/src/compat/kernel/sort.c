@@ -80,7 +80,8 @@ void sort(void *base, size_t num, size_t size, cmp_func_t cmp_func, swap_func_t 
 	sort_r(base, num, size, unprivate_cmp, swap_func ? unprivate_swap : NULL, &functions);
 }
 
-void *bsearch(const void *key, const void *base, size_t num, size_t size, cmp_func_t cmp)
+/* Weak: an image that links Mesa has the C library's, which it keeps. */
+__weak void *bsearch(const void *key, const void *base, size_t num, size_t size, cmp_func_t cmp)
 {
 	return __inline_bsearch(key, base, num, size, cmp);
 }
