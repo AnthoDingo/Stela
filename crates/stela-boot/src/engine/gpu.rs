@@ -1684,8 +1684,7 @@ fn start(
             && let Some((start, size)) = claimed.first().and_then(|claimed| claimed.stolen)
         {
             output::arguments(format_args!(
-                "GPU stolen memory: {:#x}..{:#x}
-",
+                "GPU stolen memory: {:#x}..{:#x}\n",
                 start,
                 start + size
             ));
