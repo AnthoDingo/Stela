@@ -226,8 +226,23 @@ pub unsafe fn publish_identity(identity: &PciIdentity) -> Result<(), super::owne
     }
 }
 
+/// Answer Linux code's `pci_map_rom` for the function at `bus` and `devfn`
+/// with `rom`, a ROM image read another way: an Intel GPU's VBT, from the
+/// ACPI OpRegion i915 reads through ACPI, which Stela does not build.
+///
+/// # Safety
+/// On the entered canonical owner's task, which may sleep.
+pub unsafe fn publish_rom(bus: u8, devfn: u8, rom: &'static [u8]) -> Result<(), super::owner::Errno> {
+    // SAFETY: the caller's contract; the image lasts as long as the boot.
+    match unsafe { stela_linux_pci_publish_rom(bus, devfn, rom.as_ptr().cast(), rom.len()) } {
+        0 => Ok(()),
+        error => Err(error),
+    }
+}
+
 unsafe extern "C" {
     fn stela_linux_pci_publish_identity(identity: *const PciIdentity) -> c_int;
+    fn stela_linux_pci_publish_rom(bus: u8, devfn: u8, data: *const c_void, size: usize) -> c_int;
     fn stela_linux_pci_attach(function: *const RawFunction, error: *mut c_int) -> *mut c_void;
     fn stela_linux_owner() -> *const super::owner::RawOwner;
     fn stela_linux_pci_bound(device: *const c_void) -> bool;

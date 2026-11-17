@@ -594,8 +594,50 @@ static size_t rom_size(struct pci_dev *pdev, void __iomem *rom, size_t size)
 	return min((size_t)(image - rom), size);
 }
 
+/* ROM images an owner read for a function another way, which pci_map_rom
+ * answers in place of the function's ROM BAR (stela_linux_pci_publish_rom):
+ * an Intel GPU's VBT, from the ACPI OpRegion i915 cannot read here. */
+struct published_rom {
+	struct list_head node;
+	u8 bus, devfn;
+	const void *data;
+	size_t size;
+};
+
+static LIST_HEAD(published_roms);
+
+int stela_linux_pci_publish_rom(u8 bus, u8 devfn, const void *data, size_t size)
+{
+	struct published_rom *rom;
+
+	if (!data || !size)
+		return -EINVAL;
+	rom = kzalloc_obj(*rom);
+	if (!rom)
+		return -ENOMEM;
+	*rom = (struct published_rom){.bus = bus, .devfn = devfn, .data = data, .size = size};
+	list_add_tail(&rom->node, &published_roms);
+	return 0;
+}
+
+static const struct published_rom *published_rom(const struct pci_dev *pdev)
+{
+	const struct published_rom *rom;
+
+	list_for_each_entry(rom, &published_roms, node)
+		if (rom->bus == pdev->bus->number && rom->devfn == pdev->devfn)
+			return rom;
+	return NULL;
+}
+
 void __iomem *pci_map_rom(struct pci_dev *pdev, size_t *size)
 {
+	const struct published_rom *published = published_rom(pdev);
+
+	if (published) {
+		*size = published->size;
+		return (void __force __iomem *)(uintptr_t)published->data;
+	}
 	resource_size_t start = pci_resource_start(pdev, PCI_ROM_RESOURCE);
 
 	*size = (size_t)pci_resource_len(pdev, PCI_ROM_RESOURCE);
@@ -614,6 +656,8 @@ void __iomem *pci_map_rom(struct pci_dev *pdev, size_t *size)
 
 void pci_unmap_rom(struct pci_dev *pdev, void __iomem *rom)
 {
+	if (published_rom(pdev))
+		return;
 	iounmap(rom);
 	pci_disable_rom(pdev);
 }
@@ -808,6 +852,17 @@ int main(void)
 	/* No ROM signature: nothing maps and decoding goes back off. */
 	rom_window[0] = 0;
 	assert(!pci_map_rom(&dev, &size) && *(u32 *)&config[PCI_ROM_ADDRESS] == 0xc0000000);
+
+	/* A ROM image the owner published maps in place of the ROM BAR, which
+	 * stays off, and unmapping it leaves it to the owner. */
+	static const u8 vbt[] = {'$', 'V', 'B', 'T', 1, 2, 3, 4};
+	assert(stela_linux_pci_publish_rom(3, PCI_DEVFN(1, 0), vbt, sizeof(vbt)) == 0);
+	rom = pci_map_rom(&dev, &size);
+	assert(rom == (void __force __iomem *)(uintptr_t)vbt && size == sizeof(vbt));
+	assert(*(u32 *)&config[PCI_ROM_ADDRESS] == 0xc0000000);
+	pci_unmap_rom(&dev, rom);
+	assert(readl(rom) == 0x54425624);
+	assert(stela_linux_pci_publish_rom(3, PCI_DEVFN(1, 0), NULL, 0) == -EINVAL);
 	stela_linux_exit();
 	printf("Linux PCI configuration, enabling and option ROMs passed\n");
 	return 0;

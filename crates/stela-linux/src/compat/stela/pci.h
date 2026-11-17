@@ -27,6 +27,9 @@ struct stela_linux_pci_identity {
 _Static_assert(sizeof(struct stela_linux_pci_identity) == 272, "Linux PCI identity ABI");
 /* Publish it for the boot. On the entered owner's task; it may sleep. */
 int stela_linux_pci_publish_identity(const struct stela_linux_pci_identity *identity);
+/* What pci_map_rom answers for the function at bus/devfn: size bytes at data,
+ * which the owner keeps for the boot. On the entered owner's task. */
+int stela_linux_pci_publish_rom(u8 bus, u8 devfn, const void *data, size_t size);
 bool stela_linux_pci_devices_present(void);
 /* Checked original standard capability walker. PCIBIOS failure is distinct
  * from a successful absent capability (*found == 0). No context ownership moves. */
