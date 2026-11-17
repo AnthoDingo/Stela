@@ -2164,7 +2164,7 @@ pub unsafe fn open(
             root,
         ),
         gpus: core::mem::take(&mut devices.gpus),
-        isa_bridges: core::mem::take(&mut devices.isa_bridges),
+        gpu_bridges: core::mem::take(&mut devices.gpu_bridges),
         usb,
         usb_disks,
         disks: host_disks,
@@ -2507,7 +2507,7 @@ pub struct Opened {
     /// The display controllers probe left for their own drivers.
     pub gpus: alloc::vec::Vec<stela_drivers::gpu::Adapter>,
     /// The Intel ISA bridges probe found, which name the PCH.
-    pub isa_bridges: alloc::vec::Vec<stela_drivers::gpu::IsaBridge>,
+    pub gpu_bridges: alloc::vec::Vec<stela_drivers::gpu::GpuBridge>,
     /// The xHCI controllers' topology owners, polled for hotplug.
     pub usb: super::usb::HostUsb,
     /// Whole disks for the guest's USB mass storage, in option order.

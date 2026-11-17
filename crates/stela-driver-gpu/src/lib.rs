@@ -105,31 +105,55 @@ impl Adapter {
     }
 }
 
-/// An Intel ISA (LPC/eSPI) bridge, which names the PCH: i915 identifies the
-/// PCH by it (`display/intel_pch.c`), so the Intel image shows it to Linux,
-/// identity only. Inventory only, as [`Adapter`].
+/// A bridge i915 looks up, which the Intel image shows to Linux, identity
+/// only, with the host bridge's configuration. Inventory only, as [`Adapter`].
+///
+/// - The ISA (LPC/eSPI) bridge names the PCH, which i915 identifies it by
+///   (`display/intel_pch.c`).
+/// - The host bridge at 00:00.0 holds MCHBAR, which i915 reads from its
+///   configuration (`i915_gmch.c`, `i915_gmch_bridge_setup`): read once here.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct IsaBridge {
+pub struct GpuBridge {
     pub address: Address,
     pub device: u16,
     pub subsystem_vendor: u16,
     pub subsystem_device: u16,
     pub class: [u8; 3],
     pub revision: u8,
+    /// The host bridge's first 256 bytes of configuration, read as words.
+    pub config: Option<[u8; 256]>,
 }
 
-impl IsaBridge {
+impl GpuBridge {
     /// `PCI_CLASS_BRIDGE_ISA`.
-    const CLASS: [u8; 2] = [0x06, 0x01];
+    const ISA: [u8; 2] = [0x06, 0x01];
+    /// `PCI_CLASS_BRIDGE_HOST`.
+    const HOST: [u8; 2] = [0x06, 0x00];
 
-    /// Reads the revision and subsystem words of an Intel ISA bridge only.
+    /// Reads an Intel ISA bridge's revision and subsystem words, and the
+    /// Intel host bridge at 00:00.0's first 256 bytes of configuration.
     pub fn discover<C: ConfigSpace>(
         function: &mut Function<C>,
     ) -> Result<Option<Self>, crate::bus::pci::ConfigError> {
-        if function.vendor != INTEL_VENDOR || function.class[..2] != Self::CLASS {
+        let host = function.class[..2] == Self::HOST
+            && function.address.segment == 0
+            && function.address.bus == 0
+            && function.address.device == 0
+            && function.address.function == 0;
+        if function.vendor != INTEL_VENDOR || (function.class[..2] != Self::ISA && !host) {
             return Ok(None);
         }
         let subsystem = function.config().read32(0x2c)?;
+        let config = if host {
+            let mut bytes = [0u8; 256];
+            for (offset, word) in bytes.chunks_exact_mut(4).enumerate() {
+                let value = function.config().read32(offset as u16 * 4)?;
+                word.copy_from_slice(&value.to_le_bytes());
+            }
+            Some(bytes)
+        } else {
+            None
+        };
         Ok(Some(Self {
             address: function.address,
             device: function.device,
@@ -137,6 +161,7 @@ impl IsaBridge {
             subsystem_device: (subsystem >> 16) as u16,
             class: function.class,
             revision: function.config().read8(0x08)?,
+            config,
         }))
     }
 }
@@ -211,10 +236,10 @@ mod tests {
 
     #[test]
     fn an_intel_isa_bridge_is_identified_and_others_are_not() {
-        let bridge = IsaBridge::discover(&mut function(INTEL_VENDOR, [0x06, 0x01, 0x00]));
+        let bridge = GpuBridge::discover(&mut function(INTEL_VENDOR, [0x06, 0x01, 0x00]));
         assert_eq!(
             bridge,
-            Ok(Some(IsaBridge {
+            Ok(Some(GpuBridge {
                 address: Address {
                     segment: 0,
                     bus: 1,
@@ -226,15 +251,72 @@ mod tests {
                 subsystem_device: 0x081c,
                 class: [0x06, 0x01, 0x00],
                 revision: 0x21,
+                config: None,
             }))
         );
         assert_eq!(
-            IsaBridge::discover(&mut function(0x1022, [0x06, 0x01, 0x00])),
+            GpuBridge::discover(&mut function(0x1022, [0x06, 0x01, 0x00])),
             Ok(None)
         );
         assert_eq!(
-            IsaBridge::discover(&mut function(INTEL_VENDOR, [0x06, 0x04, 0x00])),
+            GpuBridge::discover(&mut function(INTEL_VENDOR, [0x06, 0x04, 0x00])),
             Ok(None)
         );
+    }
+
+    #[test]
+    fn the_host_bridge_at_the_root_is_read_whole_and_one_elsewhere_is_not() {
+        struct Words;
+
+        impl ConfigSpace for Words {
+            fn read32(&self, offset: u16) -> Result<u32, crate::bus::pci::ConfigError> {
+                Ok(match offset {
+                    0 => 0x5904_8086,
+                    8 => u32::from_be_bytes([6, 0, 0, 0x08]),
+                    0x2c => 0x081c_1028,
+                    0x48 => 0xfed1_0001,
+                    other => u32::from(other),
+                })
+            }
+
+            fn write32(&mut self, _: u16, _: u32) -> Result<(), crate::bus::pci::ConfigError> {
+                panic!("GPU inventory must not change the controller");
+            }
+
+            fn write16(&mut self, _: u16, _: u16) -> Result<(), crate::bus::pci::ConfigError> {
+                panic!("GPU inventory must not change the controller");
+            }
+
+            fn write8(&mut self, _: u16, _: u8) -> Result<(), crate::bus::pci::ConfigError> {
+                panic!("GPU inventory must not change the controller");
+            }
+
+            fn read8(&self, offset: u16) -> Result<u8, crate::bus::pci::ConfigError> {
+                Ok((self.read32(offset & !3)? >> (8 * (offset & 3))) as u8)
+            }
+
+            fn read16(&self, offset: u16) -> Result<u16, crate::bus::pci::ConfigError> {
+                Ok((self.read32(offset & !3)? >> (8 * (offset & 2))) as u16)
+            }
+        }
+
+        let at = |bus| {
+            Function::new(
+                Address {
+                    segment: 0,
+                    bus,
+                    device: 0,
+                    function: 0,
+                },
+                Words,
+            )
+            .unwrap()
+        };
+        let bridge = GpuBridge::discover(&mut at(0)).unwrap().unwrap();
+        let config = bridge.config.unwrap();
+        assert_eq!(bridge.device, 0x5904);
+        assert_eq!(config[0x48..0x4c], 0xfed1_0001u32.to_le_bytes());
+        assert_eq!(config[0x80..0x84], 0x80u32.to_le_bytes());
+        assert_eq!(GpuBridge::discover(&mut at(1)), Ok(None));
     }
 }

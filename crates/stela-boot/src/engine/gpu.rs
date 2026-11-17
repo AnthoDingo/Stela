@@ -1590,7 +1590,7 @@ struct Start {
     kernel: &'static LinuxKernel,
     claimed: ManuallyDrop<Vec<Claimed>>,
     #[cfg(feature = "intel")]
-    isa_bridges: Vec<gpu::IsaBridge>,
+    gpu_bridges: Vec<gpu::GpuBridge>,
     completed: Rc<Cell<Option<ManuallyDrop<Started>>>>,
 }
 
@@ -1608,7 +1608,7 @@ unsafe impl ManagedJob for Start {
     fn run(mut self: Pin<&mut Self>) {
         let claimed = core::mem::take(&mut *self.claimed);
         #[cfg(feature = "intel")]
-        let started = start(self.kernel, claimed, &self.isa_bridges);
+        let started = start(self.kernel, claimed, &self.gpu_bridges);
         #[cfg(not(feature = "intel"))]
         let started = start(self.kernel, claimed);
         self.completed.set(Some(ManuallyDrop::new(started)));
@@ -1618,7 +1618,7 @@ unsafe impl ManagedJob for Start {
 fn start(
     kernel: &LinuxKernel,
     claimed: Vec<Claimed>,
-    #[cfg(feature = "intel")] isa_bridges: &[gpu::IsaBridge],
+    #[cfg(feature = "intel")] gpu_bridges: &[gpu::GpuBridge],
 ) -> Started {
     #[cfg(feature = "nvk")]
     stela_boot_core::heap::set_peak_hook(gate::peak_passed);
@@ -1635,7 +1635,7 @@ fn start(
     }
     #[cfg(feature = "intel")]
     {
-        job.result = isa_bridges.iter().try_for_each(|bridge| {
+        job.result = gpu_bridges.iter().try_for_each(|bridge| {
             let identity = stela_linux::function::PciIdentity {
                 vendor: INTEL,
                 device: bridge.device,
@@ -1645,6 +1645,8 @@ fn start(
                 bus: bridge.address.bus,
                 devfn: bridge.address.device << 3 | bridge.address.function,
                 revision: bridge.revision,
+                config_valid: u8::from(bridge.config.is_some()),
+                config: bridge.config.unwrap_or([0; 256]),
             };
             // SAFETY: entered, on a task.
             unsafe { stela_linux::function::publish_identity(&identity) }
@@ -1799,7 +1801,7 @@ pub(super) struct Machine {
     /// The ISA bridges i915 identifies the PCH by, shown to Linux identity
     /// only before i915 starts.
     #[cfg(feature = "intel")]
-    pub isa_bridges: Vec<gpu::IsaBridge>,
+    pub gpu_bridges: Vec<gpu::GpuBridge>,
 }
 
 fn environment_error(error: WorkError) -> kernel_work::Error {
@@ -1866,7 +1868,7 @@ pub(super) fn open(machine: Machine, claimed: Vec<Claimed>) -> Result<(), Error>
         #[cfg(feature = "drm-client")]
         heap_bytes,
         #[cfg(feature = "intel")]
-        isa_bridges,
+        gpu_bridges,
     } = machine;
     let image = work.image()?;
     let task_data = work.task_data()?;
@@ -1955,7 +1957,7 @@ pub(super) fn open(machine: Machine, claimed: Vec<Claimed>) -> Result<(), Error>
             domain.clone(),
             claimed,
             #[cfg(feature = "intel")]
-            isa_bridges,
+            gpu_bridges,
             time.as_ref(),
         ))
     })??;
@@ -2019,7 +2021,7 @@ fn mount_and_start(
     platform: Host,
     domain: Arc<Domain<SLOTS>>,
     claimed: ManuallyDrop<Vec<Claimed>>,
-    #[cfg(feature = "intel")] isa_bridges: Vec<gpu::IsaBridge>,
+    #[cfg(feature = "intel")] gpu_bridges: Vec<gpu::GpuBridge>,
     time: &dyn Clock,
 ) -> Result<MountedStartup, Error> {
     let deadline = time
@@ -2082,7 +2084,7 @@ fn mount_and_start(
         kernel: owner.as_ref(),
         claimed,
         #[cfg(feature = "intel")]
-        isa_bridges,
+        gpu_bridges,
         completed: completed.clone(),
     });
     // SAFETY: the ready original task broker keeps the callback and all

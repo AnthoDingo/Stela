@@ -692,7 +692,7 @@ pub struct Devices {
     /// These are not initialized accelerators; each records its missing port.
     pub gpus: Vec<gpu::Adapter>,
     /// Intel ISA bridges, which name the PCH an Intel GPU's display uses.
-    pub isa_bridges: Vec<gpu::IsaBridge>,
+    pub gpu_bridges: Vec<gpu::GpuBridge>,
     /// Host keyboards and pointers: virtio-input devices, USB HID devices
     /// behind xHCI controllers, and the i8042 ports the ACPI namespace
     /// lists, each polled through [`InputDevice::poll`].
@@ -1770,8 +1770,8 @@ pub unsafe fn probe_observed(
             // Recorded, not claimed: whatever drives the bridge goes on.
             // An unreadable one is left out, and an Intel image refuses its
             // GPU without the PCH it names.
-            if let Ok(Some(bridge)) = gpu::IsaBridge::discover(&mut function) {
-                devices.isa_bridges.push(bridge);
+            if let Ok(Some(bridge)) = gpu::GpuBridge::discover(&mut function) {
+                devices.gpu_bridges.push(bridge);
             }
             if display_audio(function.class, address, &displays) {
                 devices
