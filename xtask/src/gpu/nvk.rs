@@ -738,7 +738,13 @@ pub(super) fn compile(clang: &Path, build: &Path, units: &[Unit], jobs: u16) -> 
         for _ in 0..jobs {
             scope.spawn(|| {
                 while let Some(unit) = units.get(next.fetch_add(1, Ordering::Relaxed)) {
-                    if !stale(&unit.output, build) {
+                    // A unit whose flags changed is stale as well: a define
+                    // can change a type's layout. One compiled before its
+                    // flags were kept is judged by its inputs alone.
+                    let flags = unit.output.with_extension("flags");
+                    let command = unit.arguments.join(" ");
+                    let kept = fs::read_to_string(&flags).ok();
+                    if !stale(&unit.output, build) && kept.is_none_or(|kept| kept == command) {
                         continue;
                     }
                     let output = Command::new(clang)
@@ -752,7 +758,10 @@ pub(super) fn compile(clang: &Path, build: &Path, units: &[Unit], jobs: u16) -> 
                         .current_dir(build)
                         .output();
                     let report = match output {
-                        Ok(output) if output.status.success() => continue,
+                        Ok(output) if output.status.success() => match fs::write(&flags, &command) {
+                            Ok(()) => continue,
+                            Err(error) => error.to_string(),
+                        },
                         Ok(output) => String::from_utf8_lossy(&output.stderr).into_owned(),
                         Err(error) => error.to_string(),
                     };
