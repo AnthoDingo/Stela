@@ -328,20 +328,24 @@ void pci_dev_put(struct pci_dev *dev)
 		put_device(&dev->dev);
 }
 
-struct pci_dev *pci_get_domain_bus_and_slot(int domain, unsigned int bus, unsigned int devfn)
-{
-	struct pci_dev *dev;
-
-	list_for_each_entry(dev, &devices, bus_list)
-		if (pci_domain_nr(dev->bus) == domain && dev->bus->number == bus &&
-		    dev->devfn == devfn)
-			return pci_dev_get(dev);
-	return NULL;
-}
-
 /* Functions other owners keep, which Linux code may find and identify but
  * not configure or bind (stela_linux_pci_publish_identity). */
 static LIST_HEAD(identities);
+
+/* The function at the address: among the published ones, then the identities
+ * other owners keep. */
+struct pci_dev *pci_get_domain_bus_and_slot(int domain, unsigned int bus, unsigned int devfn)
+{
+	struct list_head *lists[] = {&devices, &identities};
+	struct pci_dev *dev;
+
+	for (size_t i = 0; i < ARRAY_SIZE(lists); i++)
+		list_for_each_entry(dev, lists[i], bus_list)
+			if (pci_domain_nr(dev->bus) == domain && dev->bus->number == bus &&
+			    dev->devfn == devfn)
+				return pci_dev_get(dev);
+	return NULL;
+}
 
 static int refuse_read(struct pci_bus *bus, unsigned int devfn, int where, int size, u32 *value)
 {
@@ -351,6 +355,24 @@ static int refuse_read(struct pci_bus *bus, unsigned int devfn, int where, int s
 	(void)size;
 	*value = ~0U;
 	return PCIBIOS_DEVICE_NOT_FOUND;
+}
+
+/* Reads of the configuration the owner gave, as the bus's sysdata, by whole
+ * aligned bytes, words or dwords within its 256 bytes. */
+static int identity_read(struct pci_bus *bus, unsigned int devfn, int where, int size, u32 *value)
+{
+	const u8 *config = bus->sysdata;
+
+	if (!config)
+		return refuse_read(bus, devfn, where, size, value);
+	*value = ~0U;
+	if (where < 0 || (size != 1 && size != 2 && size != 4) || where & (size - 1) ||
+	    where + size > 256)
+		return PCIBIOS_BAD_REGISTER_NUMBER;
+	*value = 0;
+	for (int i = 0; i < size; i++)
+		*value |= (u32)config[where + i] << (8 * i);
+	return PCIBIOS_SUCCESSFUL;
 }
 
 static int refuse_write(struct pci_bus *bus, unsigned int devfn, int where, int size, u32 value)
@@ -363,7 +385,7 @@ static int refuse_write(struct pci_bus *bus, unsigned int devfn, int where, int 
 	return PCIBIOS_DEVICE_NOT_FOUND;
 }
 
-static struct pci_ops identity_ops = {.read = refuse_read, .write = refuse_write};
+static struct pci_ops identity_ops = {.read = identity_read, .write = refuse_write};
 
 int stela_linux_pci_publish_identity(const struct stela_linux_pci_identity *identity)
 {
@@ -374,6 +396,14 @@ int stela_linux_pci_publish_identity(const struct stela_linux_pci_identity *iden
 		kfree(bus);
 		kfree(dev);
 		return -ENOMEM;
+	}
+	if (identity->config_valid) {
+		bus->sysdata = kmemdup(identity->config, sizeof(identity->config), GFP_KERNEL);
+		if (!bus->sysdata) {
+			kfree(bus);
+			kfree(dev);
+			return -ENOMEM;
+		}
 	}
 	bus->number = identity->bus;
 	bus->ops = &identity_ops;
@@ -733,6 +763,25 @@ int main(void)
 	isa = pci_get_class(PCI_CLASS_BRIDGE_ISA << 8, NULL);
 	assert(isa && isa->device == 0x9d4e);
 	pci_dev_put(isa);
+
+	/* A host bridge is found by its address and its configuration read, whole
+	 * aligned accesses only, never written. */
+	struct stela_linux_pci_identity host = {
+		.bus = 0, .devfn = PCI_DEVFN(0, 0), .vendor = 0x8086, .device = 0x5914,
+		.class = PCI_CLASS_BRIDGE_HOST << 8, .revision = 0x08, .config_valid = 1,
+	};
+	host.config[0x48] = 0x01;
+	host.config[0x4a] = 0xd1;
+	host.config[0x4b] = 0xfe;
+	assert(!stela_linux_pci_publish_identity(&host));
+	struct pci_dev *root = pci_get_domain_bus_and_slot(0, 0, PCI_DEVFN(0, 0));
+	assert(root && root->device == 0x5914);
+	assert(pci_read_config_dword(root, 0x48, &value) == PCIBIOS_SUCCESSFUL &&
+	       value == 0xfed10001);
+	assert(pci_read_config_dword(root, 0x49, &value) == PCIBIOS_BAD_REGISTER_NUMBER);
+	assert(pci_read_config_dword(root, 0x100, &value) == PCIBIOS_BAD_REGISTER_NUMBER);
+	assert(pci_write_config_dword(root, 0x48, 0) == PCIBIOS_DEVICE_NOT_FOUND);
+	pci_dev_put(root);
 
 	/* A page from the start of a two-page memory BAR; nothing past its end. */
 	dev.resource[2].start = 0xc0000000;

@@ -206,9 +206,13 @@ pub struct PciIdentity {
     pub bus: u8,
     pub devfn: u8,
     pub revision: u8,
+    /// Whether `config` is its configuration, which Linux code may read and
+    /// never write; otherwise every access is refused.
+    pub config_valid: u8,
+    pub config: [u8; 256],
 }
 
-const _: () = assert!(size_of::<PciIdentity>() == 16);
+const _: () = assert!(size_of::<PciIdentity>() == 272);
 
 /// Publish `identity` to Linux code for the boot.
 ///

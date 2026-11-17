@@ -19,8 +19,12 @@ struct stela_linux_pci_identity {
 	u8 bus;
 	u8 devfn;
 	u8 revision;
+	/* Whether config is its configuration, which Linux code may read and
+	 * never write; otherwise every access is refused. */
+	u8 config_valid;
+	u8 config[256];
 };
-_Static_assert(sizeof(struct stela_linux_pci_identity) == 16, "Linux PCI identity ABI");
+_Static_assert(sizeof(struct stela_linux_pci_identity) == 272, "Linux PCI identity ABI");
 /* Publish it for the boot. On the entered owner's task; it may sleep. */
 int stela_linux_pci_publish_identity(const struct stela_linux_pci_identity *identity);
 bool stela_linux_pci_devices_present(void);
