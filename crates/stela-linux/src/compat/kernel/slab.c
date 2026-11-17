@@ -11,6 +11,7 @@
 #include <linux/gfp.h>
 #include <linux/minmax.h>
 #include <linux/overflow.h>
+#include <linux/printk.h>
 #include <linux/slab.h>
 #include <linux/rbtree.h>
 #include <linux/log2.h>
@@ -83,7 +84,13 @@ static bool request_supported(gfp_t flags)
 		allowed |= __GFP_ACCOUNT;
 	bool quiescent = stela_linux_quiescent();
 	bool may_block = gfpflags_allow_blocking(flags);
+	/* A request that cannot fail waits for memory, so only one that may block
+	 * has it: a failure of the heap is then fatal (allocate). */
+	if (may_block)
+		allowed |= __GFP_NOFAIL;
 	if ((flags & ~allowed) || (may_block && !quiescent)) {
+		pr_warn("kmalloc refused: flags %#x, %s\n", (unsigned int)flags,
+			quiescent ? "quiescent" : "not quiescent");
 		stela_linux_unsupported("kmalloc allocation policy or context");
 		return false;
 	}
@@ -109,8 +116,11 @@ static void *allocate(size_t size, gfp_t flags, size_t minimum_align)
 	u8 *base = gfpflags_allow_blocking(flags) ?
 		stela_linux_heap_alloc(align + size, align) :
 		stela_linux_heap_try_alloc(align + size, align);
-	if (!base)
+	if (!base) {
+		if (flags & __GFP_NOFAIL)
+			stela_linux_fatal("a __GFP_NOFAIL allocation found no memory");
 		return NULL;
+	}
 	struct header *header = (struct header *)(base + align) - 1;
 	*header = (struct header){.size = align + size, .align = align};
 	index_allocation(header);
@@ -306,12 +316,16 @@ static void policy_and_context(void)
 		GFP_KERNEL | __GFP_DMA, GFP_KERNEL | __GFP_DMA32,
 		GFP_KERNEL | __GFP_RECLAIMABLE, GFP_KERNEL | __GFP_MOVABLE,
 		GFP_KERNEL | __GFP_COMP, GFP_KERNEL | __GFP_MEMALLOC,
-		GFP_KERNEL | __GFP_NOFAIL,
+		GFP_ATOMIC | __GFP_NOFAIL,
 		GFP_KERNEL | __GFP_THISNODE,
 		GFP_KERNEL | (__force gfp_t)(1U << 31),
 	};
 	for (size_t i = 0; i < ARRAY_SIZE(refused); i++)
 		check_refusal(refused[i]);
+	/* A request that may block and cannot fail is served. */
+	void *unfailing = kmalloc(8, GFP_KERNEL | __GFP_NOFAIL);
+	assert(unfailing);
+	kfree(unfailing);
 	preempt_disable();
 	check_refusal(GFP_KERNEL);
 	preempt_enable();

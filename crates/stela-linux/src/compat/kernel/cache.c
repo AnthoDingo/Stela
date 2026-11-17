@@ -215,13 +215,20 @@ struct kmem_cache *__kmem_cache_create_args(const char *name, unsigned int objec
  * ordinary ready slot, then fail without backing growth or metadata allocation. */
 static bool request_supported(gfp_t flags)
 {
-	/* Growth already makes one fallible attempt and forwards NORETRY. */
+	/* Growth already makes one fallible attempt and forwards NORETRY, which
+	 * is all that RETRY_MAYFAIL's "try hard, then fail" comes to here. */
 	gfp_t allowed = GFP_KERNEL | __GFP_ZERO | __GFP_NOWARN | __GFP_NOMEMALLOC |
-		__GFP_ACCOUNT | __GFP_NORETRY;
+		__GFP_ACCOUNT | __GFP_NORETRY | __GFP_RETRY_MAYFAIL;
 	if ((flags & (__GFP_HIGH | __GFP_RECLAIM)) == GFP_ATOMIC)
 		allowed |= __GFP_HIGH;
+	/* A request that cannot fail waits for memory, so only one that may block
+	 * has it: a failure is then fatal (kmem_cache_alloc_noprof). */
+	if (gfpflags_allow_blocking(flags))
+		allowed |= __GFP_NOFAIL;
 	if ((flags & ~allowed) ||
 	    (gfpflags_allow_blocking(flags) && !stela_linux_quiescent())) {
+		pr_warn("cache allocation refused: flags %#x, %s\n", (unsigned int)flags,
+			stela_linux_quiescent() ? "quiescent" : "not quiescent");
 		stela_linux_unsupported("cache allocation policy or context");
 		return false;
 	}
@@ -254,7 +261,7 @@ static struct cache_slab *grow_cache(struct kmem_cache *cache, gfp_t flags)
 	/* Canonical policy/provider validation precedes slab metadata acquisition.
 	 * Compound ownership retains the entire extent if any tail is pinned.
 	 * This internal bookkeeping adds COMP without dropping any caller bit. */
-	gfp_t backing_flags = flags | __GFP_COMP;
+	gfp_t backing_flags = (flags & ~__GFP_NOFAIL) | __GFP_COMP;
 	if (cache->flags & SLAB_RECLAIM_ACCOUNT)
 		backing_flags |= __GFP_RECLAIMABLE;
 	struct page *pages = alloc_pages_noprof(backing_flags, cache->order);
@@ -322,7 +329,7 @@ bool stela_linux_cache_prime(struct kmem_cache *cache)
 	return grow_cache(cache, GFP_KERNEL | __GFP_NOWARN) != NULL;
 }
 
-void *kmem_cache_alloc_noprof(struct kmem_cache *cache, gfp_t flags)
+static void *cache_alloc(struct kmem_cache *cache, gfp_t flags)
 {
 	cache = require_cache(cache);
 	if (!request_supported(flags))
@@ -362,6 +369,15 @@ void *kmem_cache_alloc_noprof(struct kmem_cache *cache, gfp_t flags)
 	void *object = slab->cpu + index * cache->stride;
 	if (flags & __GFP_ZERO)
 		memset(object, 0, cache->object_size);
+	return object;
+}
+
+void *kmem_cache_alloc_noprof(struct kmem_cache *cache, gfp_t flags)
+{
+	void *object = cache_alloc(cache, flags);
+
+	if (!object && (flags & __GFP_NOFAIL))
+		stela_linux_fatal("a __GFP_NOFAIL allocation found no memory");
 	return object;
 }
 
@@ -1111,7 +1127,7 @@ static void policy_and_creation(void)
 	kmem_cache_free(cache, object);
 	const gfp_t unsupported_requests[] = {
 		GFP_KERNEL | __GFP_HIGH, GFP_KERNEL | __GFP_MEMALLOC,
-		GFP_KERNEL | __GFP_NOFAIL, GFP_KERNEL | __GFP_RETRY_MAYFAIL,
+		GFP_ATOMIC | __GFP_NOFAIL, GFP_KERNEL | __GFP_NOMEMALLOC | __GFP_HIGH,
 		GFP_KERNEL | __GFP_RECLAIMABLE,
 		GFP_KERNEL | __GFP_MOVABLE, GFP_KERNEL | __GFP_DMA,
 		GFP_KERNEL | __GFP_COMP,
@@ -1124,6 +1140,10 @@ static void policy_and_creation(void)
 		assert(refusals() == refused + 1 && !cache->live);
 	}
 	assert(page_attempts() == attempts);
+	/* A request that tries hard and may fail, as GEM's, is served. */
+	object = kmem_cache_alloc(cache, GFP_KERNEL | __GFP_RETRY_MAYFAIL | __GFP_NOWARN);
+	assert(object);
+	kmem_cache_free(cache, object);
 	for (unsigned int context = 0; context < 4; context++) {
 		unsigned long irq = 0;
 		switch (context) {
