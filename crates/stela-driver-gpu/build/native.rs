@@ -48,7 +48,7 @@ const DRM_SOURCES: &[&str] = &[
     "drm_auth",
     "drm_blend",
     "drm_bridge",
-    "drm_cache",
+    // drm_cache: src/compat/linux/kernel/drm_cache.c, with its x86 code.
     "drm_color_mgmt",
     "drm_colorop",
     "drm_connector",

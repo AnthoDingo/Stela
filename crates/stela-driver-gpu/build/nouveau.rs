@@ -21,6 +21,13 @@ const COMPOSITES: [&str; 1] = ["nouveau"];
 /// lacks, or defines only as a trap, by service. Building fails when the
 /// imports change, so each supplied service leaves this list with its change.
 const OPEN: &[(&str, &[&str])] = &[
+    // drm_cache.c's x86 code (src/compat/linux/kernel/drm_cache.c): the
+    // fallbacks for a processor without CLFLUSH and the SSE4.1 copy, which
+    // cpufeature.h never reports.
+    (
+        "x86 cache fallbacks",
+        &["kernel_fpu_begin", "kernel_fpu_end", "wbinvd_on_all_cpus"],
+    ),
     // Traps nothing nouveau runs reaches: TTM allocates from its own pool
     // and Stela never swaps it out.
     (
