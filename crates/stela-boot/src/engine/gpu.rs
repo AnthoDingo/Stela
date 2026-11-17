@@ -142,6 +142,11 @@ const RESOURCE_WIDE: u64 = 0x10_0000;
 /// `gh100.c` 52), which `nvkm_device_pci_new` sets as the mask. A mapping
 /// past it is refused (`function::Mappings`), not truncated.
 const DMA_LIMIT: u64 = (1 << 47) - 1;
+/// Every DMA mask i915 sets on an Intel graphics version 9 GPU holds 39 bits:
+/// `GEN8_FEATURES`' `dma_mask_size` (`i915_pci.c`), which `i915_set_dma_info`
+/// sets as the mask, as above.
+#[cfg(feature = "intel")]
+const INTEL_DMA_LIMIT: u64 = (1 << 39) - 1;
 /// How long the GPUs may take to boot their firmware before the guest starts.
 const START_SECONDS: u64 = 60;
 /// The longest idle wait while they do, which the timeout above is checked at.
@@ -1101,7 +1106,11 @@ fn claim(
         bus: address.bus,
         devfn: address.device << 3 | address.function,
         irq: line,
-        dma_limit: DMA_LIMIT,
+        dma_limit: match adapter.vendor {
+            #[cfg(feature = "intel")]
+            gpu::Vendor::Intel => INTEL_DMA_LIMIT,
+            _ => DMA_LIMIT,
+        },
         ..Placement::default()
     };
     let (mut bars, mut resources) = (Vec::new(), ManuallyDrop::new(Vec::new()));
