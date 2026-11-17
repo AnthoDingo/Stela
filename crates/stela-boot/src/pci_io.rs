@@ -375,16 +375,16 @@ pub(crate) fn intel_backlight(handle: Handle) -> Option<(u64, u32)> {
 
 /// The physical address of the ACPI OpRegion the Intel graphics on GOP
 /// `handle` names in its ASLS register (configuration offset 0xFC), which
-/// i915 reads its VBT from (`display/intel_opregion.c`). `None` for another
-/// device or an unset register.
+/// i915 reads its VBT from (`display/intel_opregion.c`), or why there is
+/// none: another device, an unreadable or unset register.
 #[cfg(feature = "intel")]
-pub(crate) fn intel_opregion(handle: Handle) -> Option<u64> {
+pub(crate) fn intel_opregion(handle: Handle) -> Result<u64, &'static str> {
     const INTEL: u16 = 0x8086;
     const ASLS: u32 = 0xfc;
-    let mut pci = gop_pci(handle)?;
-    let header = pci.read_header().ok()?;
+    let mut pci = gop_pci(handle).ok_or("the screen has no PCI I/O")?;
+    let header = pci.read_header().map_err(|_| "unreadable configuration header")?;
     if u16::from_le_bytes([header[0], header[1]]) != INTEL || header[0x0b] != 3 {
-        return None;
+        return Err("the screen is not Intel graphics");
     }
     let mut asls = 0u32;
     // SAFETY: live boot protocol; EfiPciIoWidthUint32 (2) reads one
@@ -392,7 +392,11 @@ pub(crate) fn intel_opregion(handle: Handle) -> Option<u64> {
     let read = unsafe {
         (pci.config_read)(&mut *pci, 2, ASLS, 1, ptr::from_mut(&mut asls).cast())
     };
-    (read.is_success() && asls != 0).then_some(u64::from(asls))
+    match (read.is_success(), asls) {
+        (false, _) => Err("ASLS unreadable"),
+        (true, 0) => Err("ASLS unset"),
+        (true, asls) => Ok(u64::from(asls)),
+    }
 }
 
 fn status(value: Status) -> Result<(), Error> {

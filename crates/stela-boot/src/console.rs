@@ -191,8 +191,9 @@ impl Framebuffer {
             ));
         }
         #[cfg(feature = "intel")]
-        if let Some(asls) = crate::pci_io::intel_opregion(handle) {
-            crate::host_firmware::vbt::capture(asls);
+        match crate::pci_io::intel_opregion(handle) {
+            Ok(asls) => crate::host_firmware::vbt::capture(asls),
+            Err(why) => crate::output::arguments(format_args!("DISPLAY no OpRegion: {why}\n")),
         }
         if let Some((registers, ctl2)) = crate::pci_io::intel_backlight(handle) {
             screen.backlight = Some(registers as usize);
