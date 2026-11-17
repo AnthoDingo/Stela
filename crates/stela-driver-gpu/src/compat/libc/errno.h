@@ -31,6 +31,7 @@ int *__errno_location(void);
 #define ENOSYS 38
 #define EOVERFLOW 75
 #define EOPNOTSUPP 95
+#define ENOBUFS 105
 #define ENOTSUP EOPNOTSUPP
 #define ETIME 62
 #define ETIMEDOUT 110

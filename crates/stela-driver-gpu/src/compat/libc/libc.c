@@ -7,6 +7,7 @@
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <inttypes.h>
 #include <limits.h>
 #include <locale.h>
 #include <math.h>
@@ -470,6 +471,11 @@ long long llabs(long long value)
 	return value < 0 ? -value : value;
 }
 
+intmax_t imaxabs(intmax_t value)
+{
+	return value < 0 ? -value : value;
+}
+
 static unsigned int random_state = 1;
 
 void srand(unsigned int seed)
@@ -882,6 +888,14 @@ int open(const char *path, int flags, ...)
 	return checked(stela_libc_drm_open((unsigned int)strtoul(path + sizeof(prefix) - 1, NULL, 10)));
 }
 
+/* Paths are absolute here: no directory has a descriptor. */
+int openat(int fd, const char *path, int flags, ...)
+{
+	if (fd != AT_FDCWD)
+		return fail(EBADF);
+	return open(path, flags);
+}
+
 int close(int fd)
 {
 	struct text_file *text = text_file(fd);
@@ -1023,6 +1037,14 @@ int lstat(const char *path, struct stat *result)
 
 int mkdir(const char *path, mode_t mode)
 {
+	(void)path;
+	(void)mode;
+	return fail(EACCES);
+}
+
+int mkfifoat(int fd, const char *path, mode_t mode)
+{
+	(void)fd;
 	(void)path;
 	(void)mode;
 	return fail(EACCES);
@@ -1183,6 +1205,18 @@ int dladdr(const void *address, Dl_info *info)
 {
 	(void)address;
 	(void)info;
+	return 0;
+}
+
+/* Mesa's configuration requires it for ANV; its one caller, util/build_id.c,
+ * is compat/mesa/build_id.c here. The image is linked whole, with no loaded
+ * object's program headers to report. */
+struct dl_phdr_info;
+int dl_iterate_phdr(int (*callback)(struct dl_phdr_info *, size_t, void *), void *data);
+int dl_iterate_phdr(int (*callback)(struct dl_phdr_info *, size_t, void *), void *data)
+{
+	(void)callback;
+	(void)data;
 	return 0;
 }
 
