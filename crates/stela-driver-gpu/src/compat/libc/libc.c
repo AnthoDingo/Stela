@@ -880,6 +880,10 @@ static int open_meminfo(void)
 int open(const char *path, int flags, ...)
 {
 	(void)flags;
+	/* As Linux refuses a path it cannot read: ANV stats the GPU's primary
+	 * node, which a device here does not name (`compat/mesa/drm.c`). */
+	if (!path)
+		return fail(EFAULT);
 	if (!strcmp(path, "/proc/meminfo"))
 		return open_meminfo();
 	static const char prefix[] = "/dev/dri/renderD";
