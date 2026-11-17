@@ -340,6 +340,32 @@ release:
 	return result;
 }
 
+/* A fault handler running on a task, for the mapping it fills: what
+ * apply_to_page_range, which names only the mm, fills. */
+struct faulting {
+	struct list_head node;
+	struct task_struct *task;
+	struct stela_linux_mapping *mapping;
+};
+
+static LIST_HEAD(faults);
+static DEFINE_SPINLOCK(faulting_lock);
+
+static struct stela_linux_mapping *faulting_mapping(void)
+{
+	struct stela_linux_mapping *mapping = NULL;
+	struct faulting *frame;
+
+	spin_lock(&faulting_lock);
+	list_for_each_entry(frame, &faults, node)
+		if (frame->task == current) {
+			mapping = frame->mapping;
+			break;
+		}
+	spin_unlock(&faulting_lock);
+	return mapping;
+}
+
 vm_fault_t stela_linux_fault(struct stela_linux_mapping *mapping, unsigned long address,
 			     bool write)
 {
@@ -358,7 +384,15 @@ vm_fault_t stela_linux_fault(struct stela_linux_mapping *mapping, unsigned long 
 	};
 
 	unsigned long sequence = READ_ONCE(mapping->invalidate_sequence);
+	struct faulting frame = {.task = current, .mapping = mapping};
+
+	spin_lock(&faulting_lock);
+	list_add(&frame.node, &faults);
+	spin_unlock(&faulting_lock);
 	vm_fault_t result = vma->vm_ops->fault(&vmf);
+	spin_lock(&faulting_lock);
+	list_del(&frame.node);
+	spin_unlock(&faulting_lock);
 
 	if (result & (VM_FAULT_ERROR | VM_FAULT_NOPAGE | VM_FAULT_RETRY | VM_FAULT_COMPLETED))
 		return result;
@@ -389,6 +423,51 @@ vm_fault_t vmf_insert_pfn_prot(struct vm_area_struct *vma, unsigned long addr, u
 		return error == -ENOMEM ? VM_FAULT_OOM : VM_FAULT_SIGBUS;
 	mapping->filled = max(mapping->filled, (addr & PAGE_MASK) + PAGE_SIZE);
 	return VM_FAULT_NOPAGE;
+}
+
+/* As mm/memory.c's, for a fault handler that fills page table entries itself
+ * (i915's remap_io_mapping and remap_io_sg): fn writes each entry of the
+ * range, which the owner then installs as vmf_insert_pfn_prot does. The owner
+ * owns the page tables, so only the mapping this task's fault fills is a
+ * range fn may write, and an entry fn leaves empty stays unmapped. */
+int apply_to_page_range(struct mm_struct *mm, unsigned long address, unsigned long size,
+			pte_fn_t fn, void *data)
+{
+	struct stela_linux_mapping *mapping = faulting_mapping();
+
+	if (!mapping || mapping->vma.vm_mm != mm || (address | size) & ~PAGE_MASK ||
+	    address < mapping->vma.vm_start || size > mapping->vma.vm_end - address) {
+		stela_linux_unsupported("page table range outside this task's faulting mapping");
+		return -EOPNOTSUPP;
+	}
+	const struct stela_linux_owner *owner = stela_linux_owner();
+
+	for (unsigned long at = address; at < address + size; at += PAGE_SIZE) {
+		pte_t pte = __pte(0);
+		int error = fn(&pte, at, data);
+
+		if (error)
+			return error;
+		if (!pte_present(pte))
+			continue;
+		error = owner->services->map_user(owner->context, mapping->space, at, pte_pfn(pte),
+						  pte_val(pte) & ~PTE_PFN_MASK);
+		if (error)
+			return error;
+		mapping->filled = max(mapping->filled, at + PAGE_SIZE);
+	}
+	return 0;
+}
+
+/* As mm/memory.c's: removes the entries a failed fill installed. */
+void zap_special_vma_range(struct vm_area_struct *vma, unsigned long address,
+			   unsigned long size)
+{
+	struct stela_linux_mapping *mapping = container_of(vma, struct stela_linux_mapping, vma);
+
+	if (address < vma->vm_start || address >= vma->vm_end || !size)
+		return;
+	unmap_client(mapping, address, min(size, vma->vm_end - address));
 }
 
 /* Clients fault the range back in, and reach wherever it moved to. */
@@ -514,10 +593,20 @@ static void report_unmap_failure(void *context, int level, const char *message)
 	stela_test_witness_passed();
 }
 
+static unsigned int refusals;
+
+static void refused(void *context, const char *operation)
+{
+	(void)context;
+	assert(!strcmp(operation, "page table range outside this task's faulting mapping"));
+	refusals++;
+}
+
 static const struct stela_linux_services services = {
 	.map_user = map_user,
 	.unmap_user = unmap_user,
 	.log = report_unmap_failure,
+	.unsupported = refused,
 };
 static const struct stela_linux_owner owner = {.services = &services};
 
@@ -551,6 +640,30 @@ static void close_area(struct vm_area_struct *vma)
 
 static const struct vm_operations_struct operations = {.fault = fault, .close = close_area};
 static const struct vm_operations_struct prefaulting = {.fault = prefault, .close = close_area};
+
+/* As i915's remap_io_sg: each entry names the page at its own offset. */
+static int remap_entry(pte_t *pte, unsigned long addr, void *data)
+{
+	const pgprot_t *prot = data;
+
+	set_pte(pte, pte_mkspecial(pfn_pte(PFN + ((addr - BASE) >> PAGE_SHIFT), *prot)));
+	return 0;
+}
+
+static unsigned int applies;
+
+/* As i915's vm_fault_cpu: fill this page's entry and the next one's. */
+static vm_fault_t apply(struct vm_fault *vmf)
+{
+	pgprot_t prot = pgprot_writecombine(vmf->vma->vm_page_prot);
+	unsigned long size = min(2 * PAGE_SIZE, vmf->vma->vm_end - vmf->address);
+
+	applies++;
+	return apply_to_page_range(vmf->vma->vm_mm, vmf->address, size, remap_entry, &prot) ?
+		VM_FAULT_SIGBUS : VM_FAULT_NOPAGE;
+}
+
+static const struct vm_operations_struct applying = {.fault = apply, .close = close_area};
 static const struct vm_operations_struct *area_operations = &operations;
 
 static struct file *exporter;
@@ -756,6 +869,24 @@ int main(void)
 	fd_install((unsigned int)fd, get_file(file));
 	assert(!stela_linux_map(fd, SPACE, BASE, 10 * PAGE_SIZE, 0, &mapping));
 	assert(prefaults == 3 && inserted_address == BASE + 9 * PAGE_SIZE);
+	stela_linux_munmap(mapping);
+	assert(!close_fd((unsigned int)fd));
+
+	/* A fault that writes its page table entries itself installs what it
+	 * wrote, and only a fault's own range is one it may write. */
+	area_operations = &applying;
+	fd = get_unused_fd_flags(O_RDWR);
+	assert(fd >= 0);
+	fd_install((unsigned int)fd, get_file(file));
+	assert(!stela_linux_map(fd, SPACE, BASE, 4 * PAGE_SIZE, 0, &mapping));
+	assert(applies == 2 && inserted_address == BASE + 3 * PAGE_SIZE &&
+	       inserted_pfn == PFN + 3 && (pgprot_val(inserted_prot) & _PAGE_PWT));
+	pgprot_t outside = mapping->vma.vm_page_prot;
+	assert(apply_to_page_range(mapping->vma.vm_mm, BASE, PAGE_SIZE, remap_entry, &outside) ==
+	       -EOPNOTSUPP && refusals == 1);
+	removed_size = 0;
+	zap_special_vma_range(&mapping->vma, BASE + PAGE_SIZE, 2 * PAGE_SIZE);
+	assert(removed_address == BASE + PAGE_SIZE && removed_size == 2 * PAGE_SIZE);
 	stela_linux_munmap(mapping);
 	assert(!close_fd((unsigned int)fd));
 	fput(file);

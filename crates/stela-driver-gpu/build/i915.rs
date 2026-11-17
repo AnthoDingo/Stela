@@ -504,14 +504,6 @@ const OPEN: &[(&str, &[&str])] = &[
             "release_resource",
         ],
     ),
-    // Reached on version 9, not yet supplied. CPU faults on `MMAP_OFFSET` mappings, ANV's WB and WC included: i915
-    // fills the page table itself (`vm_fault_cpu`, `remap_io_sg` in
-    // `i915_mm.c`), where Linux code under Stela edits no page table and the
-    // owner maps. Designed with ANV's mmap path in Phase 4.
-    (
-        "to supply: CPU mappings",
-        &["apply_to_page_range", "zap_special_vma_range"],
-    ),
 ];
 
 /// The unit of i915's own `module_init`.

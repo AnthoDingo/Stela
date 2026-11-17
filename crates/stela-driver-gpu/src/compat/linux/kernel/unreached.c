@@ -121,7 +121,3 @@ STELA_UNSUPPORTED_ALIAS(folio_redirty_for_writepage)
 STELA_UNSUPPORTED_ALIAS(pci_bus_alloc_resource)
 STELA_UNSUPPORTED_ALIAS(pcibios_align_resource)
 STELA_UNSUPPORTED_ALIAS(release_resource)
-/* i915's CPU fault fills page tables itself, which Linux code under Stela
- * does not own. Reached by ANV's mappings: to be supplied with them. */
-STELA_UNSUPPORTED_ALIAS(apply_to_page_range)
-STELA_UNSUPPORTED_ALIAS(zap_special_vma_range)
