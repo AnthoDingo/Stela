@@ -146,8 +146,13 @@ fn host_identity() -> alloc::string::String {
     host_inventory::number("HostMemoryBytes", ram_bytes);
     host_inventory::text("FirmwareVendor", vendor.clone());
     host_inventory::number("FirmwareRevision", uefi::system::firmware_revision().into());
+    // The commit xtask built from, so a boot log names the image that ran.
+    let version = match option_env!("STELA_COMMIT") {
+        Some(commit) => alloc::format!("{}+{commit}", env!("CARGO_PKG_VERSION")),
+        None => env!("CARGO_PKG_VERSION").into(),
+    };
     line(&Identity {
-        version: env!("CARGO_PKG_VERSION"),
+        version: &version,
         cpu: &cpu,
         signature,
         ram_bytes,

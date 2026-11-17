@@ -572,6 +572,15 @@ fn build_with_diagnostics(release: bool, diagnostics: bool, image: Image) -> Res
     if release {
         command.arg("--release");
     }
+    // The commit the image is built from, which its boot log names.
+    if let Ok(output) = Process::new("git")
+        .args(["rev-parse", "--short", "HEAD"])
+        .current_dir(root())
+        .output()
+        && output.status.success()
+    {
+        command.env("STELA_COMMIT", String::from_utf8_lossy(&output.stdout).trim());
+    }
     crate::clang::toolset()?.apply(&mut command);
     exec(&mut command)?;
     let profile = if release { "release" } else { "debug" };
