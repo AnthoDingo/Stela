@@ -460,15 +460,14 @@ const OPEN: &[(&str, &[&str])] = &[
         "mappings ANV does not make",
         &["vm_mmap", "find_vma", "anon_inode_getfd", "compat_vma_mmap"],
     ),
-    // Runtime suspend (`CONFIG_PM` is off, so no PM callback runs), the SNPS
-    // HDMI PLL (DG2 on) and the L3 parity sysfs files (`HAS_L3_DPF`: IVB and
-    // HSW; removed only when i915 unbinds, which Stela never does).
+    // Runtime suspend (`CONFIG_PM` is off, so no PM callback runs) and the L3
+    // parity sysfs files (`HAS_L3_DPF`: IVB and HSW; removed only when i915
+    // unbinds, which Stela never does).
     (
-        "runtime PM, SNPS PLL and L3 parity",
+        "runtime PM and L3 parity",
         &[
             "pci_d3cold_disable",
             "pci_d3cold_enable",
-            "int_sqrt",
             "device_create_bin_file",
             "device_remove_bin_file",
         ],

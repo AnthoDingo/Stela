@@ -240,6 +240,7 @@ impl Linux {
             PathBuf::from(format!("{LINUX}/lib/string_unescape.c")),
             PathBuf::from(format!("{LINUX}/lib/errseq.c")),
             PathBuf::from(format!("{LINUX}/lib/math/div64.c")),
+            PathBuf::from(format!("{LINUX}/lib/math/int_sqrt.c")),
             PathBuf::from(format!("{LINUX}/lib/crypto/blake2s.c")),
             PathBuf::from(format!("{LINUX}/lib/iov_iter_copy.c")),
             PathBuf::from(format!("{LINUX}/lib/ratelimit.c")),

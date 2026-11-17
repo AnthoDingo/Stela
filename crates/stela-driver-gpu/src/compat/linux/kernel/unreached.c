@@ -105,11 +105,9 @@ STELA_UNSUPPORTED_ALIAS(vm_mmap)
 STELA_UNSUPPORTED_ALIAS(find_vma)
 STELA_UNSUPPORTED_ALIAS(anon_inode_getfd)
 STELA_UNSUPPORTED_ALIAS(compat_vma_mmap)
-/* Runtime suspend (no CONFIG_PM), the SNPS HDMI PLL (DG2 on), the L3 parity
- * files (IVB/HSW). */
+/* Runtime suspend (no CONFIG_PM), the L3 parity files (IVB/HSW). */
 STELA_UNSUPPORTED_ALIAS(pci_d3cold_disable)
 STELA_UNSUPPORTED_ALIAS(pci_d3cold_enable)
-STELA_UNSUPPORTED_ALIAS(int_sqrt)
 STELA_UNSUPPORTED_ALIAS(device_create_bin_file)
 STELA_UNSUPPORTED_ALIAS(device_remove_bin_file)
 /* CPU maps of objects without struct pages, which on version 9 back only
