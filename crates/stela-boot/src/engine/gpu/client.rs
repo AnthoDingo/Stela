@@ -21,7 +21,7 @@
 //! The Intel image, without Mesa yet, uses only the DRM calls Stela's own
 //! display makes.
 #![cfg_attr(
-    not(feature = "nvk"),
+    not(feature = "metal-gate"),
     allow(
         dead_code,
         reason = "Mesa, the Metal service and the GPU reports use the rest"
@@ -115,6 +115,7 @@ pub(super) struct DrmDevice {
 }
 
 /// `struct drm_nouveau_getparam`.
+#[cfg(feature = "nvk")]
 #[repr(C)]
 struct GetParam {
     parameter: u64,
@@ -122,7 +123,9 @@ struct GetParam {
 }
 
 /// `DRM_IOCTL_NOUVEAU_GETPARAM`.
+#[cfg(feature = "nvk")]
 const GET_PARAM: u32 = 0xc010_6440;
+#[cfg(feature = "nvk")]
 const CHIPSET_ID: u64 = 11;
 /// The first render node's minor.
 pub(super) const RENDER_MINOR: u32 = 128;
@@ -445,7 +448,7 @@ unsafe fn perform(gpu: &Installed, operation: Operation) -> i64 {
                 let gpu = installed().expect("requests are posted to a running environment");
                 // A completion waiter's file is a nouveau client: freed after
                 // the stop began, its RM objects outlive GSP's unload.
-                #[cfg(feature = "nvk")]
+                #[cfg(feature = "metal-gate")]
                 if !super::waiter::wait_gone() {
                     output::arguments(format_args!(
                         "GPU completion waiter still open at the stop\n"
@@ -1344,6 +1347,7 @@ pub(super) fn unmap(address: NonNull<u8>) {
 }
 
 /// `NOUVEAU_GETPARAM_CHIPSET_ID` of the bound GPU at `index`.
+#[cfg(feature = "nvk")]
 pub(super) fn chipset(index: u32) -> Option<u16> {
     let fd = submit(Operation::Open(RENDER_MINOR + index)) as c_int;
     if fd < 0 {
@@ -1363,9 +1367,11 @@ pub(super) fn chipset(index: u32) -> Option<u16> {
 }
 
 /// `NOUVEAU_GETPARAM_FB_SIZE`: the VRAM nouveau makes available.
+#[cfg(feature = "nvk")]
 const FB_SIZE: u64 = 8;
 
 /// The VRAM bytes of the bound GPU at `index`, for the guest's `StelaHost`.
+#[cfg(feature = "nvk")]
 pub(in crate::engine) fn vram_bytes(index: u32) -> Option<u64> {
     let fd = submit(Operation::Open(RENDER_MINOR + index)) as c_int;
     if fd < 0 {
@@ -1503,9 +1509,9 @@ unsafe extern "C" fn stela_libc_wait(word: *const c_uint, value: c_uint, deadlin
     };
     let Some(thread) = current_thread(gpu) else {
         // Only Mesa's threads and the Metal service's PEs wait here.
-        #[cfg(feature = "nvk")]
+        #[cfg(feature = "metal-gate")]
         return super::gate::relax();
-        #[cfg(not(feature = "nvk"))]
+        #[cfg(not(feature = "metal-gate"))]
         return hint::spin_loop();
     };
     let sleeping = &SLEEPING[thread.core as usize - PROCESSORS];

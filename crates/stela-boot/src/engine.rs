@@ -36,7 +36,7 @@ pub(crate) use kernel_work::FirmwareContext;
 mod network;
 pub(crate) mod nor;
 mod parallel;
-#[cfg(feature = "nvk")]
+#[cfg(feature = "metal-gate")]
 pub(crate) mod pipelines;
 pub(crate) mod power;
 use stela_boot_core::boot_progress as progress;
@@ -1060,7 +1060,7 @@ fn run_machine<H: Host>(
         output::arguments(format_args!(
             "PROFILE on: each heartbeat reports the engine's time by phase and exit kind\n"
         ));
-        #[cfg(feature = "nvk")]
+        #[cfg(feature = "metal-gate")]
         gpu::gate::profile_passes();
     }
     if options.install.is_some() {
@@ -1260,7 +1260,7 @@ fn finish<H: Host>(
             // ones.
             machine.discard_every_block();
             let started = output::now();
-            #[cfg(feature = "nvk")]
+            #[cfg(feature = "metal-gate")]
             pipelines::write();
             let pipelines = output::millis_since(started);
             let started = output::now();
@@ -1436,6 +1436,6 @@ pub(crate) unsafe fn in_loader_root_at_stop<T>(root: u64, call: impl FnOnce() ->
 /// Unload the GPUs' firmware before a fatal stop, where one can
 /// (`gpu::gate::stop_for_fatal`).
 pub(crate) fn stop_gpus_for_fatal() {
-    #[cfg(feature = "nvk")]
+    #[cfg(feature = "metal-gate")]
     gpu::gate::stop_for_fatal();
 }

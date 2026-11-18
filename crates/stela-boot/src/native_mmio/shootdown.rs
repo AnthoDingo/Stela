@@ -33,7 +33,7 @@ const REPORT_MS: u64 = 100;
 const WAIT_MS: u64 = 30_000;
 const CR4_PGE: u64 = 1 << 7;
 const CR4_PCIDE: u64 = 1 << 17;
-#[cfg(feature = "nvk")]
+#[cfg(feature = "metal-gate")]
 const RFLAGS_IF: u64 = 1 << 9;
 const PAGE: u64 = 4096;
 /// CPUID.(EAX=7,ECX=0):EBX.INVPCID.
@@ -186,7 +186,7 @@ impl Drop for Restore {
 /// # Safety
 /// The caller holds nothing those two handlers take, and the job leaves
 /// RFLAGS.IF and CR8 as it found them.
-#[cfg(feature = "nvk")]
+#[cfg(feature = "metal-gate")]
 pub(crate) unsafe fn job<R>(body: impl FnOnce() -> R) -> R {
     let flags: u64;
     // SAFETY: reads RFLAGS through the stack, which the push and pop balance.
@@ -313,7 +313,7 @@ impl Drop for Counted {
 /// The shootdowns since the last call, the ticks they waited and how many
 /// of them retired a range peers flushed page by page, for the GPU gate's
 /// report.
-#[cfg(feature = "nvk")]
+#[cfg(feature = "metal-gate")]
 pub(crate) fn take_waits() -> (u64, u64, u64) {
     (
         WAITS[0].swap(0, Ordering::Relaxed),

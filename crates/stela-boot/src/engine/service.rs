@@ -200,7 +200,7 @@ impl Service {
             }
             nor.finish();
         }
-        #[cfg(feature = "nvk")]
+        #[cfg(feature = "metal-gate")]
         super::gpu::gate::stop(|| self.devices.serve(|devices| devices.stop_gpu_gates()));
     }
 

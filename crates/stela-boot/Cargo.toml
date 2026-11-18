@@ -38,10 +38,13 @@ intel = ["stela-drivers/i915-port", "drm-client"]
 # The guest's display and Stela's console on a bound GPU's output, through
 # DRM calls posted to the Linux environment (`engine/gpu/client.rs`).
 drm-client = ["stela-drivers/metal"]
+# The Metal gate over the image's Vulkan driver, one of the two below
+# (`engine/gpu/gate.rs`), with the AIR compiler and the StelaGPU kext.
+metal-gate = ["drm-client", "dep:stela-mesa", "stela-drivers/metal-linked"]
 # NVK, NIR and NAK in the image, from `cargo xtask gpu nvk`.
-nvk = ["nouveau", "drm-client", "dep:stela-mesa", "stela-mesa/nvk", "stela-drivers/metal-linked"]
+nvk = ["nouveau", "metal-gate", "stela-mesa/nvk"]
 # ANV, NIR and brw in an Intel image, from `cargo xtask gpu anv`.
-anv = ["intel", "dep:stela-mesa", "stela-mesa/anv", "stela-drivers/metal-vulkan"]
+anv = ["intel", "metal-gate", "stela-mesa/anv"]
 
 [dependencies]
 stela-linux = { path = "../stela-linux", features = ["kernel"] }

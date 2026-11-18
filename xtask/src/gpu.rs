@@ -160,9 +160,10 @@ pub fn default_jobs() -> u16 {
     std::thread::available_parallelism().map_or(1, |cpus| cpus.get().min(8) as u16)
 }
 
-/// Prepare ANV's archive, for an Intel image.
+/// Prepare ANV's archive, for an Intel image, and its guest components.
 pub fn build_anv(jobs: u16) -> Result<()> {
-    nvk::build(jobs, &nvk::ANV)
+    nvk::build(jobs, &nvk::ANV)?;
+    crate::guest::run()
 }
 
 /// Prepare the complete native rendering archive and its guest components.

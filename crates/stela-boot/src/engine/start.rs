@@ -360,7 +360,7 @@ fn open_host(
         .and_then(|file| translations::install(unsafe { bundle::contents_mut(file) }))
         .filter(|_| handoff.storage.present);
     // The Metal device's stored pipelines, before any GPU opens.
-    #[cfg(feature = "nvk")]
+    #[cfg(feature = "metal-gate")]
     if let Some(file) = handoff.files[..handoff.file_count]
         .iter()
         .find(|file| file.name() == super::pipelines::FILE)
@@ -744,13 +744,15 @@ fn start_processors(boot: Boot<'_>, host: &mut OpenedHost) -> Processors {
 /// of the `gates` StelaGPU gate nodes' `stela-host` property, which the kext
 /// publishes as `StelaHost`, with the translator's target and identity and
 /// each GPU's VRAM.
-#[cfg(feature = "nvk")]
+#[cfg(feature = "metal-gate")]
 fn describe_host(
     tree: &mut stela_loader::apple_device_tree::DeviceTree,
     gates: usize,
     target: TargetCpu,
 ) {
-    use crate::host_inventory::{entries, number, text};
+    #[cfg(feature = "nvk")]
+    use crate::host_inventory::number;
+    use crate::host_inventory::{entries, text};
     text("TranslatorTarget", target.id());
     let id = stela_engine::translations::translator_id();
     text(
@@ -760,6 +762,9 @@ fn describe_host(
             .map(|byte| alloc::format!("{byte:02x}"))
             .collect::<alloc::string::String>(),
     );
+    // ponytail: Intel graphics report no VRAM yet; their device-local heap,
+    // as ANV reports it, is to be the figure (the Intel port's Phase 5).
+    #[cfg(feature = "nvk")]
     for index in 0..gates {
         if let Some(bytes) = gpu::client::vram_bytes(index as u32) {
             number(alloc::format!("GPU{index}VRAMBytes"), bytes);
@@ -801,7 +806,7 @@ fn run_guest(boot: Boot<'_>, mut host: OpenedHost, mut storage: Storage) -> ! {
         x0,
         read_only_region,
         core_locks,
-        #[cfg_attr(not(feature = "nvk"), allow(unused_mut))]
+        #[cfg_attr(not(feature = "metal-gate"), allow(unused_mut))]
         mut hidden_devices,
         live_tree: mut loaded_tree,
         source: loaded_source,
@@ -883,9 +888,9 @@ fn run_guest(boot: Boot<'_>, mut host: OpenedHost, mut storage: Storage) -> ! {
         ..
     } = storage;
     let mut bare = host_owner.host();
-    #[cfg_attr(not(feature = "nvk"), allow(unused_mut))]
+    #[cfg_attr(not(feature = "metal-gate"), allow(unused_mut))]
     let mut assigned = assign(boot, &roster, topology_source.as_ref(), &full_profile);
-    #[cfg(feature = "nvk")]
+    #[cfg(feature = "metal-gate")]
     let gpu_gates = assigned
         .as_mut()
         .map(|assigned| {
@@ -911,7 +916,7 @@ fn run_guest(boot: Boot<'_>, mut host: OpenedHost, mut storage: Storage) -> ! {
     // The translator compiles for the canonical RAM's target (the BSP's live
     // features under the common worker ceiling), not the board profile's
     // ID-register list in `target`.
-    #[cfg(feature = "nvk")]
+    #[cfg(feature = "metal-gate")]
     if let Some(assigned) = &mut assigned {
         describe_host(&mut assigned.tree, gpu_gates.len(), canonical_ram.target());
     }
@@ -990,7 +995,7 @@ fn run_guest(boot: Boot<'_>, mut host: OpenedHost, mut storage: Storage) -> ! {
         loaded_source.as_ref(),
         tree,
     );
-    #[cfg(feature = "nvk")]
+    #[cfg(feature = "metal-gate")]
     if let Some(board) = &board {
         for (placement, service) in gpu_gates {
             // The board's AIC took its dies and inputs from this vector too.
@@ -2984,7 +2989,7 @@ fn start_devices(
             disks.profile_callbacks(options.profile);
             if let Some(store) = store {
                 translations::set_partition(store);
-                #[cfg(feature = "nvk")]
+                #[cfg(feature = "metal-gate")]
                 super::pipelines::prepare();
             }
             fdr_device = fdr;

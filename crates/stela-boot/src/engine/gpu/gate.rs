@@ -1,6 +1,7 @@
-//! The Metal service over NVK, which the guest reaches through StelaGPU's gate,
+//! The Metal service over the image's Vulkan driver, NVK or ANV, which the
+//! guest reaches through StelaGPU's gate,
 //!
-//! It opens on the boot CPU once nouveau has bound the GPUs, before the guest's
+//! It opens on the boot CPU once the DRM driver has bound the GPUs, before the guest's
 //! DeviceTree is final, so the tree has a gate only with a device behind it,
 //! and one for each GPU that opened.
 //!
@@ -29,11 +30,7 @@ use stela_drivers::gpu::metal::{
     deferred::busy_pause_millis,
     device::{lifecycle::QuiesceStatus, pass_times},
     error::Error,
-    native::{ExportedMemory, Loader, MemoryExporter, NativeBackend, Refusals, pipeline_store, vk},
-    nvidia::{
-        Attachment,
-        open::{Gpu, OpenError, open, reopen},
-    },
+    native::{ExportedMemory, Loader, MemoryExporter, NativeBackend, pipeline_store, vk},
     service::{Served, ServiceHost, SharedService, identity::DeviceEpoch, wire::Status},
     timing::{ExitWatch, Totals},
     vulkan::physical::PciBusInfo,
@@ -43,6 +40,17 @@ use stela_linux::{
     function::{dma_quarantine_status, quarantined_functions},
 };
 use stela_loader::{apple_device_tree::DeviceTree, stela_gpu};
+// The image's driver: one of NVK and ANV.
+#[cfg(feature = "anv")]
+use stela_drivers::gpu::metal::intel::open::{Gpu, OpenError, open, reopen};
+#[cfg(feature = "nvk")]
+use stela_drivers::gpu::metal::{
+    native::Refusals,
+    nvidia::{
+        Attachment,
+        open::{Gpu, OpenError, open, reopen},
+    },
+};
 
 type Shared = SharedService<NativeBackend, AirCompiler>;
 
@@ -58,6 +66,13 @@ const STOP_UNLOAD_SECONDS: u64 = 10;
 /// The services for the kernel's interrupts, once all are open.
 static SERVICES: AtomicPtr<Vec<Arc<Shared>>> = AtomicPtr::new(ptr::null_mut());
 
+#[cfg(feature = "anv")]
+unsafe extern "C" {
+    /// `compat/mesa/anv_nir_options.c`.
+    fn stela_anv_nir_options(physical: vk::PhysicalDevice) -> *const c_void;
+}
+
+#[cfg(feature = "nvk")]
 unsafe extern "C" {
     fn stela_nvk_nir_options(physical: vk::PhysicalDevice) -> *const c_void;
     /// `compat/mesa/submit_thread.c`.
@@ -1017,10 +1032,29 @@ impl MemoryExporter for Exporter {
 
 fn service(gpu: &Gpu, stack: u64) -> Result<Arc<Shared>, OpenError> {
     let compiler = |physical| {
-        // SAFETY: NVK's own physical device, whose options last as long.
+        // SAFETY: the driver's own physical device, whose options last as
+        // long.
+        #[cfg(feature = "nvk")]
         let options = unsafe { stela_nvk_nir_options(physical) };
-        compiler::Service::linked(NonNull::new(options.cast_mut()).expect("NVK has NIR options"))
+        // SAFETY: as above.
+        #[cfg(feature = "anv")]
+        let options = unsafe { stela_anv_nir_options(physical) };
+        compiler::Service::linked(
+            NonNull::new(options.cast_mut()).expect("the driver has NIR options"),
+        )
     };
+    // ANV submits where it is called: its ioctls reach Linux as every
+    // driver call does, and a refused submission loses the device.
+    #[cfg(feature = "anv")]
+    let loader = Loader {
+        get_instance_proc_addr: entry,
+        log: driver_message,
+        submit_thread: None,
+        refusals: None,
+        relax,
+        image_layouts: stela_drivers::gpu::metal::vulkan::backend::ImageLayouts::General,
+    };
+    #[cfg(feature = "nvk")]
     let loader = Loader {
         get_instance_proc_addr: entry,
         log: driver_message,
@@ -1098,7 +1132,7 @@ fn construct(constructed: &mut bool) {
 /// The service of `bound`, at DRM minor `index`, whose failure is reported.
 fn open_gpu(
     gpu: &Installed,
-    index: usize,
+    #[cfg_attr(feature = "anv", allow(unused_variables))] index: usize,
     bound: &Bound,
     constructed: &mut bool,
 ) -> Option<Arc<Shared>> {
@@ -1106,9 +1140,11 @@ fn open_gpu(
         crate::output::arguments(format_args!("GPU {}: {reason}\n", bound.name));
         None
     };
+    #[cfg(feature = "nvk")]
     let Some(link) = bound.link else {
         return refuse("no PCIe link");
     };
+    #[cfg(feature = "nvk")]
     let Some(chipset) = client::chipset(index as u32) else {
         return refuse("no chipset reported");
     };
@@ -1118,13 +1154,17 @@ fn open_gpu(
     let top = stack.top();
     // It serves for the boot.
     core::mem::forget(stack);
+    let pci = PciBusInfo {
+        domain: bound.drm.segment.into(),
+        bus: bound.drm.bus.into(),
+        device: bound.drm.slot.into(),
+        function: bound.drm.function.into(),
+    };
+    #[cfg(feature = "anv")]
+    let target = Gpu { pci };
+    #[cfg(feature = "nvk")]
     let target = Gpu {
-        pci: PciBusInfo {
-            domain: bound.drm.segment.into(),
-            bus: bound.drm.bus.into(),
-            device: bound.drm.slot.into(),
-            function: bound.drm.function.into(),
-        },
+        pci,
         chipset,
         // A GPU in a Thunderbolt enclosure reaches Stela as the function
         // firmware enumerated, like any other in a slot.

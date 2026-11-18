@@ -10,18 +10,16 @@
 //! ([`pump_due`]), so other PEs do not spin on a lock while Linux runs and
 //! GPU completions are not starved. Nothing reserves a core, and a Linux
 //! environment with nothing to do costs the boot PE one comparison a slice.
-#[cfg(feature = "anv")]
-mod anv;
 #[cfg(feature = "drm-client")]
 pub(super) mod client;
 #[cfg(feature = "drm-client")]
 pub(super) mod display;
 #[cfg(feature = "drm-client")]
 mod file;
-#[cfg(feature = "nvk")]
+#[cfg(feature = "metal-gate")]
 pub(super) mod gate;
 /// `xtask guest`'s objects of the StelaGPU kext.
-#[cfg(feature = "nvk")]
+#[cfg(feature = "metal-gate")]
 mod kext {
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -30,7 +28,7 @@ mod kext {
 }
 #[cfg(feature = "drm-client")]
 mod stack;
-#[cfg(feature = "nvk")]
+#[cfg(feature = "metal-gate")]
 mod waiter;
 
 use super::{
@@ -1254,7 +1252,11 @@ fn claim(
             period(before),
             duty(after),
             period(after),
-            if restored.is_some() { ", firmware's level restored" } else { "" }
+            if restored.is_some() {
+                ", firmware's level restored"
+            } else {
+                ""
+            }
         ));
     }
     // SAFETY: this scoped BAR observation was the sole user of the UC mapping.
@@ -1585,7 +1587,7 @@ pub(super) fn claim_all(
         .iter()
         .filter(|adapter| adapter.vendor == image_vendor());
     // An Intel image starts i915 without a Vulkan driver until ANV joins it.
-    if !cfg!(any(feature = "nvk", feature = "intel")) {
+    if !cfg!(any(feature = "metal-gate", feature = "intel")) {
         let mut refused = Vec::new();
         for adapter in nvidia {
             output::arguments(format_args!(
@@ -1679,7 +1681,7 @@ fn start(
     claimed: Vec<Claimed>,
     #[cfg(feature = "intel")] gpu_bridges: &[gpu::GpuBridge],
 ) -> Started {
-    #[cfg(feature = "nvk")]
+    #[cfg(feature = "metal-gate")]
     stela_boot_core::heap::set_peak_hook(gate::peak_passed);
     let mut job = Started {
         _attached: Vec::new(),
@@ -1890,26 +1892,24 @@ fn environment_error(error: WorkError) -> kernel_work::Error {
 /// aborts without one and watchdogd
 /// then panics the system, so a boot of macOS stops here instead.
 pub(super) fn no_metal_device() -> Option<&'static str> {
-    #[cfg(feature = "nvk")]
+    #[cfg(feature = "metal-gate")]
     return gate::shared()
         .is_empty()
         .then_some("no GPU started; the lines above say why");
-    #[cfg(feature = "anv")]
-    return Some("the Metal device over ANV is not built yet (the Intel port's Phase 5)");
-    #[cfg(not(any(feature = "nvk", feature = "anv")))]
-    Some("this stela.efi was built without GPU drivers (the `nvk` feature)")
+    #[cfg(not(feature = "metal-gate"))]
+    Some("this stela.efi was built without GPU drivers (the `nvk` or `anv` feature)")
 }
 
 /// The kexts a boot that gives the GPUs to nouveau links into its system.
 pub(super) fn kexts() -> Vec<stela_loader::aux_kc::Kext<'static>> {
-    #[cfg(feature = "nvk")]
+    #[cfg(feature = "metal-gate")]
     return alloc::vec![stela_loader::aux_kc::Kext {
         info: kext::INFO,
         objects: kext::OBJECTS.to_vec(),
         bundle_path: "/Library/Extensions/StelaGPU.kext".into(),
         trusted_code: kext::TRUSTED_CODE.to_vec(),
     }];
-    #[cfg(not(feature = "nvk"))]
+    #[cfg(not(feature = "metal-gate"))]
     Vec::new()
 }
 
@@ -1918,7 +1918,10 @@ pub(super) fn kexts() -> Vec<stela_loader::aux_kc::Kext<'static>> {
 /// function that showed the firmware's picture, `None` when there was a
 /// picture whose function is unknown.
 pub(super) fn serve(
-    #[cfg_attr(not(feature = "drm-client"), allow(unused_variables))] screen: Option<(usize, usize)>,
+    #[cfg_attr(not(feature = "drm-client"), allow(unused_variables))] screen: Option<(
+        usize,
+        usize,
+    )>,
     #[cfg_attr(not(feature = "drm-client"), allow(unused_variables))] firmware: Option<&str>,
 ) {
     #[cfg(feature = "drm-client")]
@@ -1930,9 +1933,7 @@ pub(super) fn serve(
         };
         display::take(screen.unwrap_or((0, 0)), shown);
     }
-    #[cfg(feature = "anv")]
-    anv::probe();
-    #[cfg(feature = "nvk")]
+    #[cfg(feature = "metal-gate")]
     gate::open_service();
 }
 
@@ -1954,7 +1955,7 @@ pub(super) fn open(machine: Machine, claimed: Vec<Claimed>) -> Result<(), Error>
     } = machine;
     let image = work.image()?;
     let task_data = work.task_data()?;
-    #[cfg(feature = "nvk")]
+    #[cfg(feature = "metal-gate")]
     let claiming = !claimed.is_empty();
     let lines = claimed
         .iter()
@@ -2044,7 +2045,7 @@ pub(super) fn open(machine: Machine, claimed: Vec<Claimed>) -> Result<(), Error>
         ))
     })??;
     let result = job.result.map_err(Error::Init);
-    #[cfg(feature = "nvk")]
+    #[cfg(feature = "metal-gate")]
     let result = result.and_then(|()| {
         if claiming && job.bound.is_empty() {
             Err(Error::NoDevices)
@@ -2249,7 +2250,7 @@ pub(super) enum Error {
     Child(Outcome),
     Init(Errno),
     Timeout,
-    #[cfg(feature = "nvk")]
+    #[cfg(feature = "metal-gate")]
     NoDevices,
 }
 
@@ -2274,8 +2275,8 @@ impl core::fmt::Display for Error {
             Self::Timeout => {
                 f.write_str("GPU startup exceeded its deadline; native owners remain held")
             }
-            #[cfg(feature = "nvk")]
-            Self::NoDevices => f.write_str("nouveau bound no NVIDIA GPUs"),
+            #[cfg(feature = "metal-gate")]
+            Self::NoDevices => f.write_str("the DRM driver bound no GPUs"),
         }
     }
 }
@@ -2618,7 +2619,7 @@ pub(super) fn pump() {
         PUMPS.idle.fetch_add(1, Ordering::Relaxed);
     }
     PUMPS.steps.fetch_add(u64::from(steps), Ordering::Relaxed);
-    #[cfg(feature = "nvk")]
+    #[cfg(feature = "metal-gate")]
     match look_due(gpu) {
         Look::Device => {
             gate::interrupted();
@@ -2630,7 +2631,7 @@ pub(super) fn pump() {
     lap(PumpPart::Look);
     // The pipelines the device added go to the store's file, queued a
     // piece at a time.
-    #[cfg(feature = "nvk")]
+    #[cfg(feature = "metal-gate")]
     super::pipelines::step();
     let took = host::rdtsc().wrapping_sub(started);
     PUMPS.ticks.fetch_add(took, Ordering::Relaxed);
@@ -2653,7 +2654,7 @@ pub(super) fn pump_posted() {
 
 /// A pump from a wait for the service's turn on the boot CPU, which runs no
 /// guest code meanwhile.
-#[cfg(feature = "nvk")]
+#[cfg(feature = "metal-gate")]
 fn pump_waiting() {
     if installed().is_some_and(|gpu| ready_since(gpu, host::rdtsc()).is_some()) {
         PUMPS.relaxed.fetch_add(1, Ordering::Relaxed);
@@ -2926,24 +2927,24 @@ fn next_timer() -> String {
     format!("+{:#x}", function.wrapping_sub(base))
 }
 
-#[cfg(feature = "nvk")]
+#[cfg(feature = "metal-gate")]
 /// The GPU interrupts taken when the Metal services last looked for
 /// completed work.
 static LOOKED: AtomicU64 = AtomicU64::new(0);
-#[cfg(feature = "nvk")]
+#[cfg(feature = "metal-gate")]
 /// A service a call held asked to look again.
 static LOOK: AtomicBool = AtomicBool::new(false);
-#[cfg(feature = "nvk")]
+#[cfg(feature = "metal-gate")]
 /// When a pump next looks though nothing asked, as a TSC value.
 static NEXT_LOOK: AtomicU64 = AtomicU64::new(0);
 
-#[cfg(feature = "nvk")]
+#[cfg(feature = "metal-gate")]
 /// How long a pump goes without looking when the GPU has not interrupted: a
 /// fence Linux signals outside its interrupt, as a submission or a job's
 /// timeout may, is seen within this.
 const LOOK_FALLBACK_NS: u64 = 10_000_000;
 
-#[cfg(feature = "nvk")]
+#[cfg(feature = "metal-gate")]
 /// What a pump looks at after its steps ([`look_due`]).
 enum Look {
     /// Each GPU's completion, which enters the driver, and the devices'
@@ -2954,7 +2955,7 @@ enum Look {
     No,
 }
 
-#[cfg(feature = "nvk")]
+#[cfg(feature = "metal-gate")]
 /// What this pump looks at: each look asks the driver for each GPU's
 /// completion, which only an interrupt or a waiter's point makes likely to
 /// have moved. Most pumps run for a call a PE posted or a Linux timer. The
@@ -2986,7 +2987,7 @@ fn look_due(gpu: &Installed) -> Look {
     }
 }
 
-#[cfg(feature = "nvk")]
+#[cfg(feature = "metal-gate")]
 /// Pumps the service again soon, from any processor, and has that pump look
 /// for completed work.
 fn look_again() {
