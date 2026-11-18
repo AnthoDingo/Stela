@@ -459,6 +459,8 @@ pub enum ImageLayouts {
 
 /// The features the binding ABI, dynamic state model and synchronization
 /// rely on; a device missing any is refused rather than half-supported.
+/// Reading storage images without a format is not among them: it holds
+/// per format (`capabilities.rs`, read-write textures).
 pub fn requirements(features: &Features, layouts: ImageLayouts) -> [Requirement; 20] {
     let requirement = |name, present| Requirement { name, present };
     [
@@ -502,9 +504,8 @@ pub fn requirements(features: &Features, layouts: ImageLayouts) -> [Requirement;
         ),
         requirement("vulkanMemoryModel", features.vulkan_memory_model),
         requirement(
-            "storageImageWithoutFormat",
-            features.shader_storage_image_read_without_format
-                && features.shader_storage_image_write_without_format,
+            "storageImageWriteWithoutFormat",
+            features.shader_storage_image_write_without_format,
         ),
         requirement("independentBlend", features.independent_blend),
         requirement("nullDescriptor", features.null_descriptor),
@@ -551,4 +552,21 @@ mod tests {
         assert!(present(&with, ImageLayouts::Unified, "unifiedImageLayouts"));
     }
 
+    #[test]
+    fn writing_without_a_format_is_required_and_reading_without_one_is_not() {
+        let write_only = Features {
+            shader_storage_image_write_without_format: true,
+            ..Features::default()
+        };
+        assert!(present(
+            &write_only,
+            ImageLayouts::Unified,
+            "storageImageWriteWithoutFormat"
+        ));
+        assert!(!present(
+            &Features::default(),
+            ImageLayouts::Unified,
+            "storageImageWriteWithoutFormat"
+        ));
+    }
 }

@@ -396,7 +396,13 @@ fn formats() -> FormatTable {
                     linear: optimal.difference(F::STORAGE_IMAGE_ATOMIC),
                     // NVK renders to and stores linear-modifier images.
                     modifier_linear: optimal.difference(F::STORAGE_IMAGE_ATOMIC),
-                    buffer: F::VERTEX_BUFFER | F::UNIFORM_TEXEL_BUFFER | F::STORAGE_TEXEL_BUFFER,
+                    // NVK's storage texel buffers read and write without a
+                    // format from Maxwell on (`nvk_buffer_view.c`).
+                    buffer: F::VERTEX_BUFFER
+                        | F::UNIFORM_TEXEL_BUFFER
+                        | F::STORAGE_TEXEL_BUFFER
+                        | F::STORAGE_READ_WITHOUT_FORMAT
+                        | F::STORAGE_WRITE_WITHOUT_FORMAT,
                     sample_counts: if renderable {
                         SAMPLE_COUNTS
                     } else {

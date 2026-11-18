@@ -1207,10 +1207,14 @@ impl Derivation<'_> {
                     && features.shader_storage_image_write_without_format
                     && shaders.contains(ShaderFeatures::TEXTURE_READ_WRITE)
             });
+        // Per format, which is all a driver without the device-wide
+        // feature offers: Vulkan 1.3 allows reading a format that has the
+        // bit without one (the SPIR-V environment, StorageImageReadWithout
+        // Format). ANV sets it where the hardware reads typed data natively
+        // (`anv_formats.c`, isl_format_supports_typed_reads).
         let storage_read = twin
             .unwrap_or(optimal)
-            .contains(F::STORAGE_READ_WITHOUT_FORMAT)
-            && features.shader_storage_image_read_without_format;
+            .contains(F::STORAGE_READ_WITHOUT_FORMAT);
         let sampled =
             optimal.contains(F::SAMPLED_IMAGE) && shaders.contains(ShaderFeatures::TEXTURE_SAMPLE);
         let attachment = color
@@ -1310,7 +1314,7 @@ impl Derivation<'_> {
                 .with(C::TEXTURE_BUFFER_WRITE, buffer_write)
                 .with(
                     C::TEXTURE_BUFFER_READ_WRITE,
-                    buffer_write && features.shader_storage_image_read_without_format,
+                    buffer_write && buffer.contains(F::STORAGE_READ_WITHOUT_FORMAT),
                 )
                 .with(
                     C::LINEAR,
