@@ -79,7 +79,7 @@ use nir_cache::{NirCache, ReflectionCache, ReflectionKey, Returned};
 
 /// The shader stages the AIR frontend lowers completely; other constructs
 /// are refused with a typed diagnostic.
-const FEATURES: ShaderFeatures = ShaderFeatures::COMPUTE
+pub(super) const FEATURES: ShaderFeatures = ShaderFeatures::COMPUTE
     .union(ShaderFeatures::VERTEX_FRAGMENT)
     .union(ShaderFeatures::MESH)
     .union(ShaderFeatures::TEXTURE_SAMPLE)

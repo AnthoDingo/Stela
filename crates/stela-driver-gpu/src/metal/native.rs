@@ -3393,16 +3393,25 @@ impl NativeBackend {
     }
 }
 
-/// The physical devices the driver behind `get_instance_proc_addr`
-/// enumerates, each as its name, Vulkan version, driver version and PCI
-/// identity, through an instance created and destroyed here. For a driver
-/// the image carries before a Metal device opens over it.
+/// What a Metal device over each physical device the driver behind
+/// `get_instance_proc_addr` enumerates would be, with `platform`: its name,
+/// Vulkan version and PCI identity, the backend's requirements it misses,
+/// the capabilities derived (GPU families, read-write texture tier, gaps),
+/// and each format it can store with the bits reading and writing without a
+/// format decide by. One line each, through an instance created and
+/// destroyed here: for a driver the image carries before a Metal device
+/// opens over it (the Intel port's checkpoint after Phase 4).
 ///
 /// # Safety
 /// `get_instance_proc_addr` is a Vulkan driver's loader entry.
-pub unsafe fn enumerate(
+pub unsafe fn assess(
     get_instance_proc_addr: vk::PFN_vkGetInstanceProcAddr,
+    platform: &super::capabilities::Platform,
 ) -> core::result::Result<Vec<alloc::string::String>, vk::Result> {
+    use super::{
+        capabilities::{ApiFeatures, Capabilities},
+        vulkan::FormatFeatures as F,
+    };
     let static_fn = ash::StaticFn {
         get_instance_proc_addr,
     };
@@ -3415,30 +3424,69 @@ pub unsafe fn enumerate(
     let info = vk::InstanceCreateInfo::default().application_info(&application);
     // SAFETY: the create info and its application info outlive the call.
     let instance = unsafe { entry.create_instance(&info, None) }?;
+    let mut lines = Vec::new();
     // SAFETY: the instance was just created.
-    let devices = unsafe { instance.enumerate_physical_devices() }.map(|devices| {
-        devices
-            .into_iter()
-            .map(|physical| {
-                // SAFETY: `physical` came from this instance.
-                let properties = unsafe { instance.get_physical_device_properties(physical) };
-                let version = properties.api_version;
-                format!(
-                    "{}: Vulkan {}.{}.{}, driver {:#x}, {:04x}:{:04x}",
-                    properties
-                        .device_name_as_c_str()
-                        .map_or("?".into(), |name| name.to_string_lossy()),
-                    vk::api_version_major(version),
-                    vk::api_version_minor(version),
-                    vk::api_version_patch(version),
-                    properties.driver_version,
-                    properties.vendor_id,
-                    properties.device_id,
-                )
-            })
-            .collect()
-    });
+    let devices = unsafe { instance.enumerate_physical_devices() };
+    for (index, &physical) in devices.as_deref().unwrap_or_default().iter().enumerate() {
+        // SAFETY: `physical` came from this instance.
+        let properties = unsafe { instance.get_physical_device_properties(physical) };
+        let version = properties.api_version;
+        lines.push(format!(
+            "physical device {}: Vulkan {}.{}.{}, driver {:#x}, {:04x}:{:04x}",
+            properties
+                .device_name_as_c_str()
+                .map_or("?".into(), |name| name.to_string_lossy()),
+            vk::api_version_major(version),
+            vk::api_version_minor(version),
+            vk::api_version_patch(version),
+            properties.driver_version,
+            properties.vendor_id,
+            properties.device_id,
+        ));
+        // SAFETY: `physical` came from this instance.
+        let available = match unsafe { instance.enumerate_device_extension_properties(physical) } {
+            Ok(available) => available,
+            Err(error) => {
+                lines.push(format!("device {index}: extensions not enumerated: {error:?}"));
+                continue;
+            }
+        };
+        let Some(snapshot) = physical::probe(&instance, physical, &Extensions::of(&available))
+        else {
+            lines.push(format!("device {index}: not probed"));
+            continue;
+        };
+        let missing: Vec<_> = requirements(&snapshot.features)
+            .iter()
+            .filter(|requirement| !requirement.present)
+            .map(|requirement| requirement.name)
+            .collect();
+        lines.push(format!("device {index}: requirements missing {missing:?}"));
+        let capabilities = Capabilities::derive(
+            &snapshot,
+            platform,
+            super::compiler::FEATURES,
+            ApiFeatures::IMPLEMENTED,
+        );
+        lines.push(format!(
+            "device {index}: families {:?}, read-write texture tier {:?}",
+            capabilities.families(),
+            capabilities.read_write_texture_tier,
+        ));
+        for gap in capabilities.gaps() {
+            lines.push(format!("device {index}: gap {} ({:?})", gap.capability, gap.cause));
+        }
+        for (format, support) in snapshot.formats.iter() {
+            if support.optimal.contains(F::STORAGE_IMAGE) {
+                lines.push(format!(
+                    "device {index}: storage {format:?} read-without-format {} write-without-format {}",
+                    support.optimal.contains(F::STORAGE_READ_WITHOUT_FORMAT),
+                    support.optimal.contains(F::STORAGE_WRITE_WITHOUT_FORMAT),
+                ));
+            }
+        }
+    }
     // SAFETY: nothing made from the instance outlives it.
     unsafe { instance.destroy_instance(None) };
-    devices
+    devices.map(|_| lines)
 }

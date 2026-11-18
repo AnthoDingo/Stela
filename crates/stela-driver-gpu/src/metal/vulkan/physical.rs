@@ -412,4 +412,9 @@ impl FormatTable {
             .find(|(known, _)| *known == format)
             .map_or_else(FormatSupport::default, |(_, support)| *support)
     }
+
+    /// Every format the driver reported, with its support.
+    pub fn iter(&self) -> impl Iterator<Item = &(Format, FormatSupport)> {
+        self.entries.iter()
+    }
 }
