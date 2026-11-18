@@ -728,3 +728,27 @@ fn varyings_link_by_identifier_and_type() {
         assert!(link_varyings(&vertex, Some(&fragment)).is_err());
     }
 }
+
+/// Without multisampled storage images, as on ANV, a function reads
+/// single-sample attachments in its interlock section and is refused
+/// multisampled ones.
+#[test]
+fn framebuffer_reads_of_multisampled_attachments_need_multisampled_storage() {
+    let single = crate::metal::nvidia::fixture::capabilities_of(|device| {
+        device.features.shader_storage_image_multisample = false;
+    });
+    assert!(single.framebuffer_reads);
+    assert!(!single.multisample_framebuffer_reads);
+    let mut fragment = interface(Stage::Fragment);
+    fragment.attachment_reads = 1;
+    let mut targets = RenderTargets::default();
+    targets.color_attachments[0] = color(PixelFormat::Rgba8Unorm);
+    let attachments = storage_attachments(&single, &fragment, &targets).unwrap();
+    assert!(attachments[0].is_some());
+    targets.raster_sample_count = 4;
+    assert_eq!(
+        storage_attachments(&single, &fragment, &targets).unwrap_err(),
+        Error::Unsupported("framebuffer reads of multisampled attachments")
+    );
+    assert!(storage_attachments(&capabilities(), &fragment, &targets).is_ok());
+}

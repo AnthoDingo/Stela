@@ -687,6 +687,10 @@ pub fn storage_attachments(
     }
     if fragment.attachment_reads != 0 {
         require(capabilities.framebuffer_reads, "framebuffer reads")?;
+        require(
+            targets.raster_sample_count <= 1 || capabilities.multisample_framebuffer_reads,
+            "framebuffer reads of multisampled attachments",
+        )?;
     }
     require(
         tests_first(fragment, targets) || capabilities.fragment_tests,
@@ -723,15 +727,18 @@ pub fn storage_attachments(
 /// The extended-range attachments a pipeline blends, one bit each, which
 /// its function blends as storage: it then stores each result's nearest
 /// code within the codes' range, as Apple GPUs do, where the blend unit
-/// would keep values past them. A device without framebuffer reads, or a
-/// function that cannot let the pipeline test fragments first, leaves
+/// would keep values past them. A device without framebuffer reads, or
+/// without them of multisampled attachments for a multisampled pipeline, or
+/// a function that cannot let the pipeline test fragments first, leaves
 /// them to the blend unit, a known hardware precision difference.
 fn blended_extended_range(
     capabilities: &Capabilities,
     fragment: &Interface,
     targets: &RenderTargets,
 ) -> u32 {
-    if !capabilities.framebuffer_reads || !tests_first(fragment, targets) {
+    let multisampled =
+        targets.raster_sample_count > 1 && !capabilities.multisample_framebuffer_reads;
+    if !capabilities.framebuffer_reads || multisampled || !tests_first(fragment, targets) {
         return 0;
     }
     targets
@@ -1234,6 +1241,10 @@ pub fn tile_target(
 ) -> Result<TileTarget> {
     require(capabilities.framebuffer_reads, "tile functions")?;
     let samples = samples.max(1);
+    require(
+        samples == 1 || capabilities.multisample_framebuffer_reads,
+        "tile functions of multisampled attachments",
+    )?;
     require(
         capabilities.supports_texture_sample_count(samples),
         "tile pipeline sample count",

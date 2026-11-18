@@ -341,6 +341,12 @@ pub struct Capabilities {
     /// read and write the attachment as storage in a fragment shader
     /// interlock section.
     pub framebuffer_reads: bool,
+    /// Framebuffer reads of multisampled attachments, whose samples the
+    /// interlock section accesses as multisampled storage images
+    /// (`shaderStorageImageMultisample`). A device without them refuses
+    /// pipelines that read multisampled attachments, and its multisampled
+    /// render targets have no storage views.
+    pub multisample_framebuffer_reads: bool,
     /// Fragment functions can run the fragment tests themselves, on copies
     /// of the pass's depth and stencil attachments in their interlock
     /// section: those that write the stencil reference on a device without
@@ -770,8 +776,13 @@ impl Derivation<'_> {
         let framebuffer_reads = raster_order_groups
             && self.check(api(
                 "framebuffer reads",
-                features.dynamic_rendering_local_read && features.shader_storage_image_multisample,
+                features.dynamic_rendering_local_read,
                 ApiFeatures::EMPTY,
+            ));
+        let multisample_framebuffer_reads = framebuffer_reads
+            && self.check(driver(
+                "framebuffer reads of multisampled attachments",
+                features.shader_storage_image_multisample,
             ));
         // A stencil output without stencil export, or storage attachments
         // whose pipeline cannot test fragments first: the function tests
@@ -1053,6 +1064,7 @@ impl Derivation<'_> {
             statistic_counters: statistics,
             memoryless_render_targets: true,
             framebuffer_reads,
+            multisample_framebuffer_reads,
             fragment_tests,
             stencil_export: limits.stencil_export,
             stencil_follows_depth,

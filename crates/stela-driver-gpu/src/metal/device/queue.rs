@@ -622,6 +622,7 @@ impl<B: Backend, C: Compiler> Device<B, C> {
                 if !texture
                     .usage
                     .contains(crate::metal::abi::TextureUsage::RENDER_TARGET)
+                    || texture.sample_count > 1 && !self.capabilities.multisample_framebuffer_reads
                 {
                     continue;
                 }
