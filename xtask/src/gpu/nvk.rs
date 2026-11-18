@@ -176,7 +176,7 @@ pub(super) const ANV: Driver = Driver {
         "u_debug_stack",
         "wsi_common_display",
     ],
-    stand_ins: &["anvcl", "blorpcl", "build_id", "drm"],
+    stand_ins: &["anvcl", "blorpcl", "build_id", "drm", "anv_nir_options"],
     model_unit: "anv_internal_kernels.c",
     not_generated: &[
         "_shaders.spv",
@@ -185,7 +185,7 @@ pub(super) const ANV: Driver = Driver {
         "float64_spv",
     ],
     rust: false,
-    air: false,
+    air: true,
 };
 /// What Mesa's configuration asks of `glslangValidator`, only for the compute
 /// shaders that build acceleration structures and decode ASTC in Vulkan's
@@ -501,7 +501,10 @@ fn generate(
             .then(|| target.to_owned())
     }));
     targets.retain(|target| {
-        !driver.not_generated.iter().any(|part| target.contains(part))
+        !driver
+            .not_generated
+            .iter()
+            .any(|part| target.contains(part))
             && ![
                 "all",
                 "test",
@@ -727,7 +730,9 @@ fn units(
             continue;
         };
         let output = &words[at + 1];
-        if !linked.contains(output.as_str()) || (whole.contains(file) && !linked_whole(driver, output)) {
+        if !linked.contains(output.as_str())
+            || (whole.contains(file) && !linked_whole(driver, output))
+        {
             continue;
         }
         if file.ends_with(driver.model_unit) {
@@ -867,10 +872,12 @@ pub(super) fn compile(clang: &Path, build: &Path, units: &[Unit], jobs: u16) -> 
                         .current_dir(build)
                         .output();
                     let report = match output {
-                        Ok(output) if output.status.success() => match fs::write(&flags, &command) {
-                            Ok(()) => continue,
-                            Err(error) => error.to_string(),
-                        },
+                        Ok(output) if output.status.success() => {
+                            match fs::write(&flags, &command) {
+                                Ok(()) => continue,
+                                Err(error) => error.to_string(),
+                            }
+                        }
                         Ok(output) => String::from_utf8_lossy(&output.stderr).into_owned(),
                         Err(error) => error.to_string(),
                     };
