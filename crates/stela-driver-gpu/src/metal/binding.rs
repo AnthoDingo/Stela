@@ -1065,17 +1065,26 @@ pub struct HeapLayout {
 }
 
 impl HeapLayout {
+    /// The most descriptors of one kind the heap holds: NVK's limit, above
+    /// the 500,000 of tier 2 argument buffers. ANV on graphics version 9
+    /// offers some 200 million, which its pool would back with gigabytes of
+    /// host memory.
+    pub const MAX_DESCRIPTORS: u32 = 1 << 20;
+
     pub fn new(limits: &Limits) -> Self {
         let sampled = limits
             .max_descriptor_set_update_after_bind_sampled_images
-            .min(limits.max_per_stage_update_after_bind_sampled_images);
+            .min(limits.max_per_stage_update_after_bind_sampled_images)
+            .min(Self::MAX_DESCRIPTORS);
         let storage = limits
             .max_descriptor_set_update_after_bind_storage_images
-            .min(limits.max_per_stage_update_after_bind_storage_images);
+            .min(limits.max_per_stage_update_after_bind_storage_images)
+            .min(Self::MAX_DESCRIPTORS);
         let samplers = limits
             .max_descriptor_set_update_after_bind_samplers
             .min(limits.max_per_stage_update_after_bind_samplers)
-            .min(limits.max_sampler_allocation_count);
+            .min(limits.max_sampler_allocation_count)
+            .min(Self::MAX_DESCRIPTORS);
         // Storage indices leave the high half's flag and level count bits free.
         let storage = storage.min(ResourceId::MAX_STORAGE);
         Self {
@@ -2318,5 +2327,18 @@ mod tests {
         assert_eq!(heap.allocate(HeapArray::Samplers), Ok(1));
         assert_eq!(heap.in_use(HeapArray::Samplers), 1);
         assert_eq!(heap.in_use(HeapArray::SampledImages), 0);
+    }
+
+    #[test]
+    fn a_driver_offering_more_descriptors_than_nvk_gets_a_heap_of_nvks_size() {
+        let mut limits = nvk(&CHIPS[0], 8 << 30).limits;
+        let nvk = HeapLayout::new(&limits);
+        // ANV on graphics version 9: 3 GiB of 16-byte indirect descriptors.
+        let anv = ((3u64 << 30) / 16) as u32;
+        limits.max_descriptor_set_update_after_bind_sampled_images = anv;
+        limits.max_per_stage_update_after_bind_sampled_images = anv;
+        limits.max_descriptor_set_update_after_bind_storage_images = anv;
+        limits.max_per_stage_update_after_bind_storage_images = anv;
+        assert_eq!(HeapLayout::new(&limits), nvk);
     }
 }
