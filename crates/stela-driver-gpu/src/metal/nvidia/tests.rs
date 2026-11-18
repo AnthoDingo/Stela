@@ -569,3 +569,19 @@ fn unorm_bytes_take_integer_storage_only_where_the_driver_reads_them_with_a_form
     assert_eq!(integer_storage(&device, P::R8Unorm), None);
     assert_eq!(integer_storage(&device, P::Rgba16Float), None);
 }
+
+/// Where the driver reads RGBA8Unorm and R8Unorm only with a declared
+/// format, as ANV on graphics version 9, shaders read and write them through
+/// their integer twins: tier 2 holds.
+#[test]
+fn read_write_tier_two_holds_through_integer_storage() {
+    let capabilities = super::fixture::unorm_bytes_read_with_a_format();
+    assert_eq!(capabilities.read_write_texture_tier, ReadWriteTextureTier::Tier2);
+    for format in [P::Rgba8Unorm, P::R8Unorm, P::Rgba8UnormSrgb] {
+        let held = capabilities.format(format);
+        assert!(held.contains(C::READ_WRITE | C::INTEGER_STORAGE), "{format:?}");
+    }
+    assert!(!capabilities.format(P::Rg8Unorm).contains(C::INTEGER_STORAGE));
+    let nvk = complete(Chip::find(0x1b3).unwrap());
+    assert!(!nvk.format(P::Rgba8Unorm).contains(C::INTEGER_STORAGE));
+}

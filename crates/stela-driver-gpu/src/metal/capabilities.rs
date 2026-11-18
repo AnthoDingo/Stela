@@ -175,6 +175,10 @@ option_set! {
         /// ([`resource::raw_rendered`](super::resource::raw_rendered)), as
         /// the driver renders no view of its format.
         const RAW_RENDER = 1 << 18;
+        /// Not Apple's: storage views hold the texels as the unsigned bytes
+        /// of an integer twin, which shaders convert ([`integer_storage`]),
+        /// as the driver reads the format only with a declared format.
+        const INTEGER_STORAGE = 1 << 19;
     }
 }
 
@@ -1229,9 +1233,18 @@ impl Derivation<'_> {
         // bit without one (the SPIR-V environment, StorageImageReadWithout
         // Format). ANV sets it where the hardware reads typed data natively
         // (`anv_formats.c`, isl_format_supports_typed_reads).
-        let storage_read = twin
-            .unwrap_or(optimal)
-            .contains(F::STORAGE_READ_WITHOUT_FORMAT);
+        // Where it reads only an 8-bit unorm format's integer twin, shaders
+        // read and write the bytes and convert them.
+        let integer_twin = storage
+            && integer_storage(
+                self.device,
+                description.format.srgb_storage().unwrap_or(description.format),
+            )
+            .is_some();
+        let storage_read = integer_twin
+            || twin
+                .unwrap_or(optimal)
+                .contains(F::STORAGE_READ_WITHOUT_FORMAT);
         let sampled =
             optimal.contains(F::SAMPLED_IMAGE) && shaders.contains(ShaderFeatures::TEXTURE_SAMPLE);
         let attachment = color
@@ -1275,6 +1288,7 @@ impl Derivation<'_> {
                 attachment && optimal.contains(F::COLOR_ATTACHMENT_BLEND) || raw_render,
             )
             .with(C::RAW_RENDER, raw_render)
+            .with(C::INTEGER_STORAGE, integer_twin)
             .with(C::DEPTH_STENCIL, depth_stencil)
             .with(
                 C::MSAA,

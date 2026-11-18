@@ -709,3 +709,35 @@ fn texture_buffers_are_bounded_texel_views() {
         Err(Error::Unsupported("texture buffers of this pixel format"))
     );
 }
+
+/// Where the driver reads RGBA8Unorm and R8Unorm only with a declared
+/// format, their storage views hold their integer twins' bytes, which
+/// shaders convert, and their images may be viewed so.
+#[test]
+fn unorm_bytes_store_through_their_integer_twin() {
+    let integer = crate::metal::nvidia::fixture::unorm_bytes_read_with_a_format();
+    let mut written = descriptor(TextureType::D2, PixelFormat::Rgba8Unorm);
+    written.usage = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;
+    let plan = texture(&integer, &written).unwrap();
+    assert_eq!(plan.views.sampled.unwrap().format, Format::R8G8B8A8Unorm);
+    assert_eq!(plan.views.storage.unwrap().format, Format::R8G8B8A8Uint);
+    assert_eq!(plan.views.integer_storage, Some(4));
+    assert!(plan.image.flags.contains(ImageCreate::MUTABLE_FORMAT));
+    assert_eq!(
+        plan.image.view_formats,
+        [Format::R8G8B8A8Unorm, Format::R8G8B8A8Srgb, Format::R8G8B8A8Uint]
+    );
+    // An sRGB texture's linear twin's bytes, likewise.
+    written.pixel_format = PixelFormat::Rgba8UnormSrgb;
+    let plan = texture(&integer, &written).unwrap();
+    assert_eq!(plan.views.storage.unwrap().format, Format::R8G8B8A8Uint);
+    assert!(plan.views.srgb_storage);
+    assert_eq!(
+        plan.image.view_formats,
+        [Format::R8G8B8A8Srgb, Format::R8G8B8A8Unorm, Format::R8G8B8A8Uint]
+    );
+    written.pixel_format = PixelFormat::R8Unorm;
+    assert_eq!(texture(&integer, &written).unwrap().views.integer_storage, Some(1));
+    // NVK's keep their own.
+    assert_eq!(texture(&capabilities(), &written).unwrap().views.integer_storage, None);
+}

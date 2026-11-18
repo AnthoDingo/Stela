@@ -713,6 +713,7 @@ impl<B: Backend, C: Compiler> Device<B, C> {
             descriptors = self.view_descriptors(sampled, storage).map(|id| {
                 id.with_srgb_storage(views.srgb_storage)
                     .with_extended_storage(views.extended_storage)
+                    .with_integer_storage(views.integer_storage)
                     .with_filter_class(views.filter_class)
             });
         }

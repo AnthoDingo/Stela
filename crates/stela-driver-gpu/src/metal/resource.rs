@@ -219,6 +219,9 @@ pub struct ShaderViews {
     /// floats, which shaders hold to its codes as they write, through the
     /// sRGB curve when `Some(true)` ([`ResourceId::EXTENDED_STORAGE`](crate::metal::binding::ResourceId::EXTENDED_STORAGE)).
     pub extended_storage: Option<bool>,
+    /// The storage views hold this many channels of unsigned bytes, which
+    /// shaders convert to and from unorm ([`C::INTEGER_STORAGE`]).
+    pub integer_storage: Option<u8>,
     /// How shaders filter the texels bicubically.
     pub filter_class: FilterClass,
 }
@@ -321,6 +324,7 @@ pub fn texture(capabilities: &Capabilities, descriptor: &TextureDescriptor) -> R
     }
     let range = full_range(descriptor, description);
     let views = shader_views(
+        capabilities,
         view_type(descriptor.texture_type),
         descriptor.pixel_format,
         realization,
@@ -330,6 +334,7 @@ pub fn texture(capabilities: &Capabilities, descriptor: &TextureDescriptor) -> R
         0.0,
     );
     attachment_storage(capabilities, descriptor, usage, &mut image);
+    integer_storage(capabilities, descriptor.pixel_format, &mut image);
     Ok(TexturePlan {
         image,
         memory: MemoryRequest {
@@ -617,16 +622,42 @@ fn attachment_storage(
     let Some(raw) = raw_texel_format(format).filter(|_| attachment || converted) else {
         return;
     };
+    image.usage |= ImageUsage::STORAGE;
+    admit_view_format(image, raw);
+}
+
+/// Lets the storage views of a texture whose shaders read and write its
+/// texels as an integer twin's bytes take the twin's format
+/// ([`C::INTEGER_STORAGE`]).
+fn integer_storage(capabilities: &Capabilities, format: PixelFormat, image: &mut ImageInfo) {
+    if let Some((twin, _)) = integer_view(capabilities, format)
+        && image.usage.contains(ImageUsage::STORAGE)
+    {
+        admit_view_format(image, twin);
+    }
+}
+
+/// The integer twin's format and channels through which storage views of
+/// `format` hold its texels ([`C::INTEGER_STORAGE`]).
+fn integer_view(capabilities: &Capabilities, format: PixelFormat) -> Option<(Format, u8)> {
+    if !capabilities.format(format).contains(C::INTEGER_STORAGE) {
+        return None;
+    }
+    let (twin, channels) = format.srgb_storage().unwrap_or(format).integer_storage()?;
+    Some((twin.describe().realization.as_ref().ok()?.format, channels))
+}
+
+/// Lets `image` be viewed as `format` too, beside the formats it is.
+fn admit_view_format(image: &mut ImageInfo, format: Format) {
     // An empty list with a mutable format admits every compatible format.
     let any = image.flags.contains(ImageCreate::MUTABLE_FORMAT) && image.view_formats.is_empty();
     image.flags |= ImageCreate::MUTABLE_FORMAT | ImageCreate::EXTENDED_USAGE;
-    image.usage |= ImageUsage::STORAGE;
     if !any {
         if image.view_formats.is_empty() {
             image.view_formats.push(image.format);
         }
-        if !image.view_formats.contains(&raw) {
-            image.view_formats.push(raw);
+        if !image.view_formats.contains(&format) {
+            image.view_formats.push(format);
         }
     }
 }
@@ -777,7 +808,9 @@ pub fn compose_swizzle(
 
 const IDENTITY: [ComponentSwizzle; 4] = [ComponentSwizzle::Identity; 4];
 
+#[allow(clippy::too_many_arguments)]
 fn shader_views(
+    capabilities: &Capabilities,
     view_type: ImageViewType,
     pixel_format: PixelFormat,
     realization: Realization,
@@ -801,8 +834,11 @@ fn shader_views(
         .srgb_storage()
         .and_then(|linear| linear.describe().realization.as_ref().ok())
         .map(|linear| linear.format);
+    let integer = integer_view(capabilities, pixel_format);
+    let storage_format = integer.map(|(twin, _)| twin).or(srgb_storage);
     // A minimum LOD bounds sampling only, so storage keeps a view without it.
-    let (sampled, storage) = if components == IDENTITY && min_lod == 0.0 && srgb_storage.is_none() {
+    let (sampled, storage) = if components == IDENTITY && min_lod == 0.0 && storage_format.is_none()
+    {
         let usage = image_usage & (ImageUsage::SAMPLED | ImageUsage::STORAGE);
         let shared = (!usage.is_empty()).then(|| view(usage, IDENTITY));
         (shared.filter(|_| sampled), shared.filter(|_| storage))
@@ -811,7 +847,7 @@ fn shader_views(
             sampled.then(|| view(ImageUsage::SAMPLED, components)),
             storage.then(|| ImageViewInfo {
                 min_lod: 0.0,
-                format: srgb_storage.unwrap_or(realization.format),
+                format: storage_format.unwrap_or(realization.format),
                 ..view(ImageUsage::STORAGE, IDENTITY)
             }),
         )
@@ -826,6 +862,7 @@ fn shader_views(
         sampled,
         faces,
         srgb_storage: storage.is_some() && srgb_storage.is_some(),
+        integer_storage: storage.and(integer).map(|(_, channels)| channels),
         extended_storage: match pixel_format.describe().encoding() {
             Encoding::ExtendedRange(codes) if codes.planes && storage.is_some() => Some(codes.srgb),
             _ => None,
@@ -926,6 +963,7 @@ pub fn texture_view(
         range.base_mip_level as f32 + view.min_lod
     };
     Ok(shader_views(
+        capabilities,
         view_type(view.texture_type),
         view.pixel_format,
         realization,
@@ -1073,6 +1111,7 @@ pub fn linear_texture(
     image.flags = image.flags.difference(ImageCreate::CUBE_COMPATIBLE);
     let range = full_range(descriptor, description);
     let views = shader_views(
+        capabilities,
         ImageViewType::D2,
         descriptor.pixel_format,
         realization,
@@ -1082,6 +1121,7 @@ pub fn linear_texture(
         0.0,
     );
     attachment_storage(capabilities, descriptor, usage, &mut image);
+    integer_storage(capabilities, descriptor.pixel_format, &mut image);
     Ok(TexturePlan {
         image,
         memory: memory(descriptor.options)?,

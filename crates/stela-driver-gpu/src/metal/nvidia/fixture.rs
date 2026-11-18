@@ -30,6 +30,11 @@ const DESCRIPTORS: u32 = 1 << 20;
 /// GB203 with a compiler that lowers every shader feature and this build's
 /// API paths: the profile other modules' tests run against.
 pub(crate) fn capabilities() -> Capabilities {
+    capabilities_of(|_| {})
+}
+
+/// [`capabilities`] of GB203's device as `change` leaves it.
+pub(crate) fn capabilities_of(change: impl FnOnce(&mut PhysicalDevice)) -> Capabilities {
     let chip = Chip::find(0x1b3).expect("GB203 is in nouveau's table");
     let attachment = Attachment {
         link: PcieLink {
@@ -39,12 +44,26 @@ pub(crate) fn capabilities() -> Capabilities {
         external: false,
         location_number: 0,
     };
+    let mut device = nvk(chip, 16 << 30);
+    change(&mut device);
     Capabilities::derive(
-        &nvk(chip, 16 << 30),
+        &device,
         &chip.platform(attachment),
         ShaderFeatures::KNOWN,
         ApiFeatures::IMPLEMENTED,
     )
+}
+
+/// [`capabilities`] with RGBA8Unorm and R8Unorm read only with a declared
+/// format, as ANV reads them on graphics version 9.
+pub(crate) fn unorm_bytes_read_with_a_format() -> Capabilities {
+    capabilities_of(|device| {
+        for format in [Format::R8G8B8A8Unorm, Format::R8Unorm] {
+            let mut support = device.formats.get(format);
+            support.optimal = support.optimal.difference(F::STORAGE_READ_WITHOUT_FORMAT);
+            device.formats.insert(format, support);
+        }
+    })
 }
 
 pub(crate) fn nvk(chip: &Chip, vram: u64) -> PhysicalDevice {
