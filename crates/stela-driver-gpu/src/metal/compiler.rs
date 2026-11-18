@@ -348,6 +348,10 @@ pub struct AirCompiler {
     /// recalled.
     restored: u64,
     recalled: u64,
+    /// The largest NIR compiled, in bytes, and its function: a driver whose
+    /// register allocator grows with the square of a shader's values (brw)
+    /// runs out of memory on one large enough.
+    largest: Option<(usize, String)>,
 }
 
 /// Where a compilation's serialized NIR goes for the next boot, by key.
@@ -452,6 +456,7 @@ impl AirCompiler {
             recall: None,
             restored: 0,
             recalled: 0,
+            largest: None,
         }
     }
 
@@ -557,7 +562,11 @@ impl AirCompiler {
             key,
             result,
             serialized,
+            entry,
         } = finished;
+        if let Ok((_, bytes)) = &result {
+            self.measure(&entry, *bytes);
+        }
         self.keep_serialized(&key, serialized.as_deref());
         let Some(nir) = self.nir.as_mut() else {
             if let Ok((shader, _)) = result {
@@ -665,7 +674,7 @@ impl AirCompiler {
         alloc::format!(
             "GPU COMPILER reflected={} reflections={} nir_hits={hits} nir_misses={misses} \
              compiled={} restored={}/{} deferred={} nir={entries}/{}M evicted={evicted} \
-             recalled={}",
+             recalled={} largest={}K@{}",
             self.reflected,
             self.reflections.as_ref().map_or(0, ReflectionCache::len),
             self.compiled,
@@ -674,7 +683,16 @@ impl AirCompiler {
             self.deferrals,
             bytes >> 20,
             self.recalled,
+            self.largest.as_ref().map_or(0, |(bytes, _)| bytes >> 10),
+            self.largest.as_ref().map_or("-", |(_, entry)| entry),
         )
+    }
+
+    /// Keeps `bytes` of `entry`'s NIR as the largest when it is.
+    fn measure(&mut self, entry: &str, bytes: usize) {
+        if self.largest.as_ref().is_none_or(|(largest, _)| bytes > *largest) {
+            self.largest = Some((bytes, String::from(entry)));
+        }
     }
 
     /// The reflection of `entry` of `library` with function constant
@@ -1276,6 +1294,7 @@ impl AirCompiler {
         self.compiled += 1;
         match result {
             Ok((shader, bytes)) => {
+                self.measure(entry, bytes);
                 if let Some(key) = job.key
                     && self.persist.is_some()
                 {
@@ -1613,6 +1632,8 @@ pub struct Finished {
     result: core::result::Result<(CompiledShader, usize), ()>,
     /// Its NIR, serialized for the next boot, when that keeps it.
     serialized: Option<Vec<u8>>,
+    /// The function compiled.
+    entry: String,
 }
 
 impl CompileJob {
@@ -1633,6 +1654,7 @@ impl CompileJob {
         };
         Finished {
             key: self.key.expect("a deferred compilation has its key"),
+            entry: String::from(self.name()),
             result: result.map_err(|_| ()),
             serialized,
         }

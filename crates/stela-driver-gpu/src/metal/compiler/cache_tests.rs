@@ -457,5 +457,5 @@ fn an_evicted_compilation_is_found_again_in_what_this_boot_serialized() {
     let recalled = compiler.serialized(&[2; 32]).unwrap();
     assert_eq!((&*recalled.0, recalled.1), (&[2u8, 2][..], true));
     assert!(compiler.serialized(&[3; 32]).is_none());
-    assert!(compiler.report().ends_with("recalled=0"));
+    assert!(compiler.report().ends_with("recalled=0 largest=0K@-"));
 }
