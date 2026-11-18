@@ -169,7 +169,7 @@ static nir_def *id_half(nir_builder *b, nir_def *id, bool high)
 static nir_def *storage_level(nir_builder *b, nir_def *id, nir_def *level)
 {
    nir_def *high = id_half(b, id, true);
-   nir_def *first = nir_iand_imm(b, high, (1u << STELA_METAL_PLANES_SHIFT) - 1);
+   nir_def *first = nir_iand_imm(b, high, (1u << STELA_METAL_INTEGER_STORAGE_SHIFT) - 1);
    if (!level)
       return first;
    nir_def *levels = nir_iadd_imm(b, nir_ushr_imm(b, high, STELA_METAL_LEVEL_SHIFT), 1);
@@ -317,7 +317,7 @@ nir_def *stela_metal_texture_planes(nir_builder *b, const struct stela_air_textu
    nir_def *planes = nir_ubitfield_extract_imm(b, high, STELA_METAL_PLANES_SHIFT, 3);
    nir_def *ten = nir_ubitfield_extract_imm(b, high, STELA_METAL_PLANES_SHIFT - 1, 1);
    nir_def *video = nir_ubitfield_extract_imm(b, high, STELA_METAL_PLANES_SHIFT - 2, 1);
-   /* Those two are storage index bits of a one-plane texture. */
+   /* Those two are a one-plane texture's integer storage bits. */
    nir_def *flags = nir_ior(b, nir_ishl_imm(b, ten, 3), nir_ishl_imm(b, video, 4));
    /* Video range without YCbCr marks extended-range codes, whose ten-bit
     * flag is the sRGB curve. */

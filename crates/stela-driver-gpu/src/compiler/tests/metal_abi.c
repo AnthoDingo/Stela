@@ -120,12 +120,15 @@ static void textures_and_samplers_index_the_heap(void)
 }
 
 /* A storage image's level indexes its texture's run of descriptors, and a
- * level past the run indexes the null descriptor. */
+ * level past the run indexes the null descriptor. The integer storage bits
+ * above the index are no part of it. */
 static void storage_levels_index_their_run(void)
 {
    const struct glsl_type *storage = glsl_image_type(GLSL_SAMPLER_DIM_2D, false, GLSL_TYPE_FLOAT);
-   /* Three levels from descriptor 9. */
-   const uint64_t id = (uint64_t)(9u | 2u << STELA_METAL_LEVEL_SHIFT) << 32 | 4u;
+   /* Three levels from descriptor 9, of four bytes held as integers. */
+   const uint64_t id =
+      (uint64_t)(9u | 3u << STELA_METAL_INTEGER_STORAGE_SHIFT | 2u << STELA_METAL_LEVEL_SHIFT) << 32 |
+      4u;
    const unsigned expected[] = {9, 10, 11, 0};
    for (unsigned level = 0; level < ARRAY_SIZE(expected); level++) {
       nir_builder b = nir_builder_init_simple_shader(MESA_SHADER_COMPUTE, NULL, "level");

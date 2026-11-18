@@ -97,8 +97,8 @@ impl ResourceId {
     pub const YCBCR: u32 = 4 << Self::PLANES_SHIFT;
     /// The high-half bit of a two-plane texture whose components are the
     /// high 10 bits of 16-bit words, rather than bytes. It and
-    /// [`Self::VIDEO_RANGE`] take the top storage index bits, which a
-    /// two-plane texture, with no storage views, leaves free.
+    /// [`Self::VIDEO_RANGE`] take the [`Self::INTEGER_STORAGE_SHIFT`] bits,
+    /// which a two-plane texture, with no storage views, leaves free.
     pub const TEN_BIT: u32 = 1 << (Self::PLANES_SHIFT - 1);
     /// The high-half bit of a two-plane YCbCr texture whose surface's pixel
     /// format is video range, rather than full range.
@@ -116,8 +116,14 @@ impl ResourceId {
     /// through the sRGB curve with [`Self::SRGB_STORAGE`] (which then does
     /// not encode), as Apple GPUs write `RGB10A8_2P_XR10` textures.
     pub const EXTENDED_STORAGE: u32 = Self::YCBCR;
+    /// The two high-half bits from which a texture of one plane holds how
+    /// many channels its storage views hold as unsigned bytes in place of
+    /// unorm ones, which shaders convert as they read and write
+    /// ([`Self::with_integer_storage`]): zero for none, then 1, 2 or 3 for
+    /// one, two or four. Storage indices lie below them.
+    pub const INTEGER_STORAGE_SHIFT: u32 = Self::PLANES_SHIFT - 2;
     /// The storage indices a texture's high half holds.
-    pub const MAX_STORAGE: u32 = 1 << Self::PLANES_SHIFT;
+    pub const MAX_STORAGE: u32 = 1 << Self::INTEGER_STORAGE_SHIFT;
 
     pub const fn new(low: u32, high: u32) -> Self {
         Self(low as u64 | (high as u64) << 32)
@@ -179,6 +185,20 @@ impl ResourceId {
             }
             None => self,
         }
+    }
+
+    /// This texture ID with storage views holding `channels` unsigned bytes
+    /// in place of unorm ones, when some: one, two or four.
+    pub const fn with_integer_storage(self, channels: Option<u8>) -> Self {
+        let field: u32 = match channels {
+            None => return self,
+            Some(4) => 3,
+            Some(channels) => {
+                debug_assert!(channels == 1 || channels == 2);
+                channels as u32
+            }
+        };
+        Self(self.0 | ((field << Self::INTEGER_STORAGE_SHIFT) as u64) << 32)
     }
 
     /// This texture ID holding `class`.
@@ -1080,17 +1100,18 @@ impl HeapLayout {
             .max_descriptor_set_update_after_bind_storage_images
             .min(limits.max_per_stage_update_after_bind_storage_images)
             .min(Self::MAX_DESCRIPTORS);
+        // Storage image indices lie below the high half's flags: 2^19, above
+        // tier 2's 500,000.
+        let storage_images = (storage - storage / 4).min(ResourceId::MAX_STORAGE);
         let samplers = limits
             .max_descriptor_set_update_after_bind_samplers
             .min(limits.max_per_stage_update_after_bind_samplers)
             .min(limits.max_sampler_allocation_count)
             .min(Self::MAX_DESCRIPTORS);
-        // Storage indices leave the high half's flag and level count bits free.
-        let storage = storage.min(ResourceId::MAX_STORAGE);
         Self {
             counts: [
                 sampled - sampled / 4,
-                storage - storage / 4,
+                storage_images,
                 samplers,
                 sampled / 4,
                 storage / 4,
@@ -1309,10 +1330,7 @@ mod tests {
                 let mask = ResourceId::YCBCR | ResourceId::TEN_BIT | ResourceId::VIDEO_RANGE;
                 assert_eq!(planar.high() & mask, flags);
                 assert_eq!(planar.with_filter_class(FilterClass::Unorm), planar);
-                assert_eq!(
-                    planar.high() & (ResourceId::MAX_STORAGE - 1),
-                    flags & (ResourceId::TEN_BIT | ResourceId::VIDEO_RANGE)
-                );
+                assert_eq!(planar.high_index(), 0);
             }
         }
     }
@@ -1391,6 +1409,10 @@ mod tests {
                 ResourceId::FILTER_CLASS_SHIFT,
             ),
             ("STELA_METAL_PLANES_SHIFT", ResourceId::PLANES_SHIFT),
+            (
+                "STELA_METAL_INTEGER_STORAGE_SHIFT",
+                ResourceId::INTEGER_STORAGE_SHIFT,
+            ),
             ("STELA_METAL_EXTENDED_STORAGE", ResourceId::EXTENDED_STORAGE),
             ("STELA_METAL_SAMPLER_CUBIC", ResourceId::SAMPLER_CUBIC),
             ("STELA_METAL_SAMPLER_MIPPED", ResourceId::SAMPLER_MIPPED),
@@ -2327,6 +2349,19 @@ mod tests {
         assert_eq!(heap.allocate(HeapArray::Samplers), Ok(1));
         assert_eq!(heap.in_use(HeapArray::Samplers), 1);
         assert_eq!(heap.in_use(HeapArray::SampledImages), 0);
+    }
+
+    #[test]
+    fn integer_storage_lies_between_the_storage_indices_and_the_planes() {
+        let id = ResourceId::texture(5, ResourceId::MAX_STORAGE - 1, 3);
+        for (channels, field) in [(1, 1), (2, 2), (4, 3)] {
+            let integer = id.with_integer_storage(Some(channels));
+            assert_eq!(integer.high() >> ResourceId::INTEGER_STORAGE_SHIFT & 3, field);
+            assert_eq!(integer.high_index(), ResourceId::MAX_STORAGE - 1);
+            assert_eq!(integer.high_count(), 3);
+            assert_eq!(integer.high() >> ResourceId::PLANES_SHIFT & 7, 0);
+        }
+        assert_eq!(id.with_integer_storage(None), id);
     }
 
     #[test]

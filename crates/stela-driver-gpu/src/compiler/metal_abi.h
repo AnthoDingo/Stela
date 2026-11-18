@@ -392,9 +392,16 @@ enum stela_metal_average_format {
  * stela_air_planes) sit in the three bits of its high half from here, below
  * its filter class and above its storage indices; its sampled descriptor
  * is its first plane's, followed by its second's. The two bits below,
- * storage index bits a two-plane texture leaves free, say whether its
- * components are 10-bit and whether its chroma is video range. */
+ * STELA_METAL_INTEGER_STORAGE_SHIFT's, which a two-plane texture without
+ * storage images leaves free, say whether its components are 10-bit and
+ * whether its chroma is video range. */
 #define STELA_METAL_PLANES_SHIFT 21u
+/* On a texture of one plane, how many channels its storage images hold as
+ * unsigned bytes in place of unorm ones sits in the two bits of its high half
+ * from here, below its planes and above its storage indices: zero for none,
+ * then 1, 2 or 3 for one, two or four. Shaders convert the channels they
+ * read and write. */
+#define STELA_METAL_INTEGER_STORAGE_SHIFT 19u
 /* The chroma flag of those three bits on a texture of one plane: its storage
  * images hold a two-plane extended-range format's half floats, which shaders
  * hold to the format's codes and 8-bit alpha as they write, through the sRGB
