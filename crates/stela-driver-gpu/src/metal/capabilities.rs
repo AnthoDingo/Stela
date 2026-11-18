@@ -22,6 +22,7 @@ use super::{
     vertex::VertexFormat,
     vulkan::{
         FormatFeatures, PhysicalDeviceType, ResolveModes, SampleCounts,
+        backend::ImageLayouts,
         physical::{Features, FormatSupport, PhysicalDevice},
     },
 };
@@ -119,6 +120,8 @@ pub struct Platform {
     pub linear_offset_alignment: u64,
     /// The backend's sparse page size, which is also its tile size.
     pub sparse_page_bytes: u64,
+    /// How the vendor's backend lays out images.
+    pub image_layouts: ImageLayouts,
 }
 
 /// One capability this device does not provide and the layer that lacks it.

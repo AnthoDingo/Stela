@@ -89,6 +89,8 @@ pub struct Loader {
     /// Waits a moment, as the platform's waits do: a call outside the
     /// service's turn may wait for the boot processor.
     pub relax: fn(),
+    /// How the vendor's backend lays out images.
+    pub image_layouts: super::vulkan::backend::ImageLayouts,
 }
 
 /// The driver's record of submissions it refused while keeping the device:
@@ -618,7 +620,7 @@ impl NativeBackend {
             destroy_instance(&instance);
             return Err(Error::Unsupported("Vulkan device of the GPU"));
         };
-        if let Some(missing) = requirements(&snapshot.features)
+        if let Some(missing) = requirements(&snapshot.features, loader.image_layouts)
             .iter()
             .find(|requirement| !requirement.present)
         {
@@ -3447,7 +3449,9 @@ pub unsafe fn assess(
         let available = match unsafe { instance.enumerate_device_extension_properties(physical) } {
             Ok(available) => available,
             Err(error) => {
-                lines.push(format!("device {index}: extensions not enumerated: {error:?}"));
+                lines.push(format!(
+                    "device {index}: extensions not enumerated: {error:?}"
+                ));
                 continue;
             }
         };
@@ -3456,7 +3460,7 @@ pub unsafe fn assess(
             lines.push(format!("device {index}: not probed"));
             continue;
         };
-        let missing: Vec<_> = requirements(&snapshot.features)
+        let missing: Vec<_> = requirements(&snapshot.features, platform.image_layouts)
             .iter()
             .filter(|requirement| !requirement.present)
             .map(|requirement| requirement.name)
@@ -3474,7 +3478,10 @@ pub unsafe fn assess(
             capabilities.read_write_texture_tier,
         ));
         for gap in capabilities.gaps() {
-            lines.push(format!("device {index}: gap {} ({:?})", gap.capability, gap.cause));
+            lines.push(format!(
+                "device {index}: gap {} ({:?})",
+                gap.capability, gap.cause
+            ));
         }
         for (format, support) in snapshot.formats.iter() {
             if support.optimal.contains(F::STORAGE_IMAGE) {

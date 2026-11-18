@@ -442,9 +442,24 @@ pub struct Requirement {
     pub present: bool,
 }
 
+/// How the backend lays out its images: each texture keeps one layout,
+/// `GENERAL`, for its whole life (`resource.rs`). A property of the
+/// vendor's backend (`capabilities::Platform`, `native::Loader`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ImageLayouts {
+    /// `VK_KHR_unified_image_layouts` is required: `GENERAL` for every use
+    /// at no loss, as on NVIDIA.
+    Unified,
+    /// Core Vulkan's `GENERAL`, which allows every access the backend
+    /// makes. The extension would add only attachment feedback loops, which
+    /// the backend never makes, and efficiency: a driver that compresses by
+    /// layout, as ANV does, compresses less.
+    General,
+}
+
 /// The features the binding ABI, dynamic state model and synchronization
 /// rely on; a device missing any is refused rather than half-supported.
-pub fn requirements(features: &Features) -> [Requirement; 20] {
+pub fn requirements(features: &Features, layouts: ImageLayouts) -> [Requirement; 20] {
     let requirement = |name, present| Requirement { name, present };
     [
         requirement("bufferDeviceAddress", features.buffer_device_address),
@@ -477,7 +492,10 @@ pub fn requirements(features: &Features) -> [Requirement; 20] {
             "extendedDynamicState",
             features.extended_dynamic_state && features.extended_dynamic_state2,
         ),
-        requirement("unifiedImageLayouts", features.unified_image_layouts),
+        requirement(
+            "unifiedImageLayouts",
+            features.unified_image_layouts || layouts == ImageLayouts::General,
+        ),
         requirement(
             "maintenance5",
             features.maintenance4 && features.maintenance5,
@@ -501,4 +519,36 @@ pub fn requirements(features: &Features) -> [Requirement; 20] {
         ),
         requirement("hostQueryReset", features.host_query_reset),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn present(features: &Features, layouts: ImageLayouts, name: &str) -> bool {
+        requirements(features, layouts)
+            .iter()
+            .any(|requirement| requirement.name == name && requirement.present)
+    }
+
+    #[test]
+    fn unified_layouts_are_required_unless_the_backend_keeps_core_general_layouts() {
+        let without = Features::default();
+        assert!(!present(
+            &without,
+            ImageLayouts::Unified,
+            "unifiedImageLayouts"
+        ));
+        assert!(present(
+            &without,
+            ImageLayouts::General,
+            "unifiedImageLayouts"
+        ));
+        let with = Features {
+            unified_image_layouts: true,
+            ..Features::default()
+        };
+        assert!(present(&with, ImageLayouts::Unified, "unifiedImageLayouts"));
+    }
+
 }

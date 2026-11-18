@@ -1034,6 +1034,7 @@ fn service(gpu: &Gpu, stack: u64) -> Result<Arc<Shared>, OpenError> {
         }),
         // An import's driver work after its turn may wait for Linux here.
         relax,
+        image_layouts: stela_drivers::gpu::metal::vulkan::backend::ImageLayouts::Unified,
     };
     // SAFETY: the linked NVK and compiler, which last for the boot.
     let service = unsafe {

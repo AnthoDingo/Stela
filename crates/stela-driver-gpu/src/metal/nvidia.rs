@@ -8,7 +8,7 @@
 use super::{
     abi::DeviceLocation,
     capabilities::Platform,
-    vulkan::{DriverId, PhysicalDeviceType, physical::Identity},
+    vulkan::{DriverId, PhysicalDeviceType, backend::ImageLayouts, physical::Identity},
 };
 use alloc::string::String;
 
@@ -136,6 +136,7 @@ impl Chip {
             linear_row_alignment: LINEAR_ROW_ALIGNMENT,
             linear_offset_alignment: LINEAR_OFFSET_ALIGNMENT,
             sparse_page_bytes: SPARSE_PAGE_BYTES,
+            image_layouts: ImageLayouts::Unified,
         }
     }
 }

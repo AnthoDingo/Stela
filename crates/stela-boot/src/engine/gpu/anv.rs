@@ -10,6 +10,7 @@ use stela_drivers::gpu::metal::{
     abi::DeviceLocation,
     capabilities::Platform,
     native::{self, vk},
+    vulkan::backend::ImageLayouts,
 };
 
 /// What Mesa's code runs on, as NVK's service does (`gate::STACK_BYTES`).
@@ -30,6 +31,7 @@ fn platform() -> Platform {
         linear_row_alignment: 64,
         linear_offset_alignment: 4096,
         sparse_page_bytes: 64 << 10,
+        image_layouts: ImageLayouts::General,
     }
 }
 
