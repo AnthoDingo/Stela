@@ -1421,7 +1421,16 @@ unsafe extern "C" fn stela_libc_allocate(size: usize, alignment: usize) -> *mut 
         Ok(layout) => {
             // SAFETY: the C library never asks for zero bytes: a block has a header.
             let pointer = unsafe { alloc(layout) };
-            if !pointer.is_null() {
+            if pointer.is_null() {
+                // Mesa does not always check (ralloc's `rerzalloc_size`), so
+                // the fault that may follow has its cause logged first.
+                let heap = crate::ALLOCATOR.usage();
+                output::arguments(format_args!(
+                    "GPU C LIBRARY could not allocate {size} bytes: heap={}M peak={}M\n",
+                    heap.live >> 20,
+                    heap.peak >> 20
+                ));
+            } else {
                 LIBC_HEAP.allocated(size);
             }
             pointer
