@@ -351,4 +351,10 @@ void stela_metal_release(nir_shader *shader);
 /* The buffer slots a compiled function accesses through its stage's table,
  * one bit each: the arguments it references, which Metal requires bound. */
 uint32_t stela_metal_buffer_reads(const nir_shader *shader);
+
+/* What shader's instructions are, as text for a log into text's bytes: its
+ * ALU (and bcsel) instructions, texture instructions, intrinsics (and image,
+ * global and scratch accesses), derefs, constants, phis, blocks, function
+ * temporaries and scratch bytes. The length it would have, as snprintf's. */
+size_t stela_metal_nir_profile(const nir_shader *shader, char *text, size_t bytes);
 #endif

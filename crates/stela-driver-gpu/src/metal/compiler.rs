@@ -348,10 +348,11 @@ pub struct AirCompiler {
     /// recalled.
     restored: u64,
     recalled: u64,
-    /// The largest NIR compiled, in bytes, and its function: a driver whose
-    /// register allocator grows with the square of a shader's values (brw)
-    /// runs out of memory on one large enough.
-    largest: Option<(usize, String)>,
+    /// The largest NIR compiled or restored, in bytes, its function and
+    /// what its instructions are ([`nir_profile`]): a driver whose register
+    /// allocator grows with the square of a shader's values (brw) runs out
+    /// of memory on one large enough.
+    largest: Option<(usize, String, String)>,
 }
 
 /// Where a compilation's serialized NIR goes for the next boot, by key.
@@ -497,7 +498,9 @@ impl AirCompiler {
         } else {
             self.restored += 1;
         }
-        Some(job.finish(shader))
+        let finished = job.finish(shader);
+        self.measure(job.name(), finished.1, finished.0.code);
+        Some(finished)
     }
 
     /// Uses `lock`, the compile lock of the compiler this one replaces, as a
@@ -564,8 +567,8 @@ impl AirCompiler {
             serialized,
             entry,
         } = finished;
-        if let Ok((_, bytes)) = &result {
-            self.measure(&entry, *bytes);
+        if let Ok((shader, bytes)) = &result {
+            self.measure(&entry, *bytes, shader.code);
         }
         self.keep_serialized(&key, serialized.as_deref());
         let Some(nir) = self.nir.as_mut() else {
@@ -674,7 +677,7 @@ impl AirCompiler {
         alloc::format!(
             "GPU COMPILER reflected={} reflections={} nir_hits={hits} nir_misses={misses} \
              compiled={} restored={}/{} deferred={} nir={entries}/{}M evicted={evicted} \
-             recalled={} largest={}K@{}",
+             recalled={} largest={}K@{}{}",
             self.reflected,
             self.reflections.as_ref().map_or(0, ReflectionCache::len),
             self.compiled,
@@ -683,15 +686,16 @@ impl AirCompiler {
             self.deferrals,
             bytes >> 20,
             self.recalled,
-            self.largest.as_ref().map_or(0, |(bytes, _)| bytes >> 10),
-            self.largest.as_ref().map_or("-", |(_, entry)| entry),
+            self.largest.as_ref().map_or(0, |(bytes, ..)| bytes >> 10),
+            self.largest.as_ref().map_or("-", |(_, entry, _)| entry),
+            self.largest.as_ref().map_or("", |(.., profile)| profile),
         )
     }
 
-    /// Keeps `bytes` of `entry`'s NIR as the largest when it is.
-    fn measure(&mut self, entry: &str, bytes: usize) {
-        if self.largest.as_ref().is_none_or(|(largest, _)| bytes > *largest) {
-            self.largest = Some((bytes, String::from(entry)));
+    /// Keeps `bytes` of `entry`'s NIR, `code`, as the largest when it is.
+    fn measure(&mut self, entry: &str, bytes: usize, code: ShaderCode) {
+        if self.largest.as_ref().is_none_or(|(largest, ..)| bytes > *largest) {
+            self.largest = Some((bytes, String::from(entry), nir_profile(code)));
         }
     }
 
@@ -1294,7 +1298,7 @@ impl AirCompiler {
         self.compiled += 1;
         match result {
             Ok((shader, bytes)) => {
-                self.measure(entry, bytes);
+                self.measure(entry, bytes, shader.code);
                 if let Some(key) = job.key
                     && self.persist.is_some()
                 {
@@ -1968,6 +1972,31 @@ unsafe fn free_nir(shader: *mut c_void) {
     }
     // SAFETY: the caller's shader, which nothing else holds.
     unsafe { ralloc_free(shader) }
+}
+
+/// What `code`'s NIR instructions are, after a space, for the compiler's
+/// report (`stela_metal_nir_profile`).
+fn nir_profile(code: ShaderCode) -> String {
+    #[cfg(all(feature = "metal-linked", target_os = "uefi"))]
+    {
+        unsafe extern "C" {
+            fn stela_metal_nir_profile(shader: *const c_void, text: *mut u8, bytes: usize)
+            -> usize;
+        }
+        let mut text = [0u8; 256];
+        // SAFETY: the compiler's live NIR, which the call only reads, and a
+        // buffer of the length given.
+        let length = unsafe {
+            stela_metal_nir_profile(code.0 as usize as *const c_void, text.as_mut_ptr(), text.len())
+        };
+        let text = &text[..length.min(text.len() - 1)];
+        alloc::format!(" {}", core::str::from_utf8(text).unwrap_or("?"))
+    }
+    #[cfg(not(all(feature = "metal-linked", target_os = "uefi")))]
+    {
+        let _ = code;
+        String::new()
+    }
 }
 
 /// The bytes `shader`'s NIR takes, for the cache's budget.

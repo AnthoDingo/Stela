@@ -1154,6 +1154,63 @@ address_slots(nir_def *def, unsigned depth)
    return 0;
 }
 
+static bool
+named(const char *name, const char *prefix)
+{
+   return !strncmp(name, prefix, strlen(prefix));
+}
+
+size_t
+stela_metal_nir_profile(const nir_shader *shader, char *text, size_t bytes)
+{
+   unsigned alu = 0, bcsel = 0, tex = 0, intrinsics = 0, images = 0, globals = 0, scratch = 0;
+   unsigned derefs = 0, consts = 0, phis = 0, blocks = 0, temps = 0;
+   nir_foreach_function_impl(impl, shader) {
+      nir_foreach_function_temp_variable(var, impl)
+         temps++;
+      nir_foreach_block(block, impl) {
+         blocks++;
+         nir_foreach_instr(instr, block) {
+            switch (instr->type) {
+            case nir_instr_type_alu:
+               alu++;
+               bcsel += nir_instr_as_alu(instr)->op == nir_op_bcsel;
+               break;
+            case nir_instr_type_tex:
+               tex++;
+               break;
+            case nir_instr_type_load_const:
+               consts++;
+               break;
+            case nir_instr_type_phi:
+               phis++;
+               break;
+            case nir_instr_type_deref:
+               derefs++;
+               break;
+            case nir_instr_type_intrinsic: {
+               intrinsics++;
+               const char *name = nir_intrinsic_infos[nir_instr_as_intrinsic(instr)->intrinsic].name;
+               images += named(name, "image") || named(name, "bindless_image");
+               globals += named(name, "load_global") || named(name, "store_global") ||
+                          named(name, "global_atomic");
+               scratch += named(name, "load_scratch") || named(name, "store_scratch");
+               break;
+            }
+            default:
+               break;
+            }
+         }
+      }
+   }
+   int length = snprintf(text, bytes,
+                         "alu=%u bcsel=%u tex=%u intrinsics=%u images=%u globals=%u scratch=%u "
+                         "derefs=%u consts=%u phis=%u blocks=%u temps=%u scratch_bytes=%u",
+                         alu, bcsel, tex, intrinsics, images, globals, scratch, derefs, consts,
+                         phis, blocks, temps, shader->scratch_size);
+   return length < 0 ? 0 : (size_t)length;
+}
+
 uint32_t
 stela_metal_buffer_reads(const nir_shader *shader)
 {
