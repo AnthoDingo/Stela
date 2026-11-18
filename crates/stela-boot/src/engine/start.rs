@@ -762,8 +762,9 @@ fn describe_host(
             .map(|byte| alloc::format!("{byte:02x}"))
             .collect::<alloc::string::String>(),
     );
-    // ponytail: Intel graphics report no VRAM yet; their device-local heap,
-    // as ANV reports it, is to be the figure (the Intel port's Phase 5).
+    // Intel graphics share the PC's memory and report no VRAM, as Apple's
+    // unified memory has none; Metal's working set is ANV's device-local
+    // heap (`metal/capabilities.rs`).
     #[cfg(feature = "nvk")]
     for index in 0..gates {
         if let Some(bytes) = gpu::client::vram_bytes(index as u32) {
