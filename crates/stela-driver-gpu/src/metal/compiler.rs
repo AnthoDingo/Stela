@@ -408,6 +408,10 @@ impl AirCompiler {
             stencil_export: limits.stencil_export.into(),
             raster_order_groups: device.features.fragment_shader_pixel_interlock.into(),
             fragment_tests: super::capabilities::fragment_tests(device).into(),
+            integer_storage: super::pixel_format::PixelFormat::ALL
+                .iter()
+                .any(|format| super::capabilities::integer_storage(device, *format).is_some())
+                .into(),
         };
         // The boot image mounts the linked AIR compiler. Hosted all-feature
         // builds also expose `Service::linked`, but only pull in its external

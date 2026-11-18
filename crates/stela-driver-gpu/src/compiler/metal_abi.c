@@ -307,6 +307,16 @@ nir_def *stela_metal_texture_extended_storage(nir_builder *b,
    return nir_bcsel(b, extended_storage(b, high), kind, nir_imm_int(b, STELA_AIR_EXTENDED_STORAGE_NONE));
 }
 
+nir_def *stela_metal_texture_integer_storage(nir_builder *b,
+                                             const struct stela_air_texture *texture,
+                                             nir_def *id, void *stage)
+{
+   id = queried_id(b, texture, id, stage);
+   return id ? nir_ubitfield_extract_imm(b, id_half(b, id, true), STELA_METAL_INTEGER_STORAGE_SHIFT,
+                                         2)
+             : NULL;
+}
+
 nir_def *stela_metal_texture_planes(nir_builder *b, const struct stela_air_texture *texture,
                                     nir_def *id, void *stage)
 {

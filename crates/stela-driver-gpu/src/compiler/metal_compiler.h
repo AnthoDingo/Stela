@@ -114,6 +114,9 @@ struct stela_metal_target {
    /* Nonzero when a fragment function writing the stencil reference without
     * stencil export runs the fragment tests itself. */
    uint32_t fragment_tests;
+   /* Nonzero when textures' storage images may hold unsigned bytes in place
+    * of unorm ones (STELA_METAL_INTEGER_STORAGE_SHIFT). */
+   uint32_t integer_storage;
 };
 #define STELA_METAL_TARGET_BYTES 56u
 

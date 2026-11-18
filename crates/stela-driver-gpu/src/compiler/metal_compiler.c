@@ -962,6 +962,8 @@ stela_metal_compile_reflected(const void *air, size_t size, const char *entry,
       .texture_null = stela_metal_texture_null,
       .texture_srgb_storage = stela_metal_texture_srgb_storage,
       .texture_extended_storage = stela_metal_texture_extended_storage,
+      .texture_integer_storage =
+         target->integer_storage ? stela_metal_texture_integer_storage : NULL,
       .sampler_never = stela_metal_sampler_never,
       .sampler_filter = stela_metal_sampler_filter,
       .texture_filter_class = stela_metal_texture_filter_class,

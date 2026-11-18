@@ -493,6 +493,11 @@ struct stela_air_options {
     * half floats, which the shader holds to the format's codes and 8-bit
     * alpha as it writes; NULL when none do. */
    stela_air_texture_query texture_extended_storage;
+   /* How many channels a write or read_write float texture's storage images
+    * hold as unsigned bytes in place of unorm ones, which the shader
+    * converts as it reads and writes: zero for none, then 1, 2 or 3 for one,
+    * two or four; NULL when none do. */
+   stela_air_texture_query texture_integer_storage;
    /* Whether a sampler compares with Metal's Never, through which a
     * comparison is zero though Vulkan's sampler for it does not compare;
     * NULL leaves comparisons to the sampler bind_sampler resolves. */

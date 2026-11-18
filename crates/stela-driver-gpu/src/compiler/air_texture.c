@@ -1379,6 +1379,127 @@ srgb_storage(const struct call *call, nir_def *texel, bool encode)
    return nir_vec(b, channels, texel->num_components);
 }
 
+/* How many channels a float texture's storage images hold as unsigned bytes
+ * in place of unorm ones (stela_air_options' texture_integer_storage): zero
+ * for none, then 1, 2 or 3 for one, two or four; NULL where no texture's
+ * do. */
+static nir_def *
+integer_storage(const struct call *call)
+{
+   const struct stela_air_options *options = call->c->options;
+   if (base_type(call->texture) != GLSL_TYPE_FLOAT || !options->texture_integer_storage)
+      return NULL;
+   return options->texture_integer_storage(call->b, call->texture_id ? NULL : call->texture,
+                                           call->texture_id, options->binding_data);
+}
+
+/* The texture's storage image at level as unsigned integers. */
+static nir_deref_instr *
+integer_deref(const struct call *call, nir_def *level)
+{
+   const struct shape *shape = call->shape;
+   return bind_texture(call, glsl_image_type(shape->dim, shape->array, GLSL_TYPE_UINT), false,
+                       level);
+}
+
+/* The unorm texel whose channels storage images hold as the unsigned bytes
+ * bytes reads, kind's count of them (integer_storage): the format's lack
+ * zero, or one for alpha. A sparse read's residency code passes. */
+static nir_def *
+unorm_bytes(nir_builder *b, nir_def *bytes, nir_def *kind)
+{
+   nir_def *channels[NIR_MAX_VEC_COMPONENTS];
+   for (unsigned i = 0; i < bytes->num_components; i++) {
+      nir_def *c = nir_channel(b, bytes, i);
+      if (i < 4) {
+         nir_def *held = i == 0 ? nir_imm_true(b) : nir_uge_imm(b, kind, i == 1 ? 2 : 3);
+         c = nir_bcsel(b, held, nir_fmul_imm(b, nir_u2f32(b, c), 1.0 / 255.0),
+                       nir_imm_float(b, i == 3 ? 1.0f : 0.0f));
+      }
+      channels[i] = c;
+   }
+   return nir_vec(b, channels, bytes->num_components);
+}
+
+/* A storage image's texel at coord, of type, five channels with a sparse
+ * read's residency code. */
+static nir_def *
+image_load(const struct call *call, nir_deref_instr *deref, nir_def *coord, nir_def *sample,
+           nir_def *level, nir_alu_type type)
+{
+   nir_builder *b = call->b;
+   const struct shape *shape = call->shape;
+   nir_def *index = sample ? sample : nir_undef(b, 1, 32);
+   return call->sparse ?
+      nir_image_deref_sparse_load(b, 5, 32, &deref->def, coord, index, nir_imm_int(b, 0),
+                                  .image_dim = shape->dim, .image_array = shape->array,
+                                  .access = image_access(call, level), .dest_type = type) :
+      nir_image_deref_load(b, 4, 32, &deref->def, coord, index, nir_imm_int(b, 0),
+                           .image_dim = shape->dim, .image_array = shape->array,
+                           .access = image_access(call, level), .dest_type = type);
+}
+
+/* The texel the texture's storage image at level holds at coord, through
+ * deref, or as the unsigned bytes of its unorm channels where its storage
+ * images hold those (integer_storage). NULL after reporting why. */
+static nir_def *
+storage_texel(const struct call *call, nir_deref_instr *deref, nir_def *coord, nir_def *sample,
+              nir_def *level)
+{
+   nir_alu_type type = nir_get_nir_type_for_glsl_base_type(base_type(call->texture));
+   nir_def *kind = integer_storage(call);
+   if (!kind)
+      return image_load(call, deref, coord, sample, level, type);
+   const struct stela_air_texture_context *c = call->c;
+   nir_block *blocks[4];
+   if (!c->branch(c->translator, nir_ine_imm(call->b, kind, 0), blocks))
+      return NULL;
+   /* Derefs stay in the block that uses them. */
+   nir_deref_instr *integer = integer_deref(call, level);
+   if (!integer)
+      return NULL;
+   nir_def *bytes = image_load(call, integer, coord, sample, level, nir_type_uint32);
+   nir_def *unorm = unorm_bytes(call->b, bytes, kind);
+   c->branch_else(c->translator, blocks);
+   if (!(deref = texture_deref(call, level)))
+      return NULL;
+   return c->branch_join(c->translator, blocks, unorm,
+                         image_load(call, deref, coord, sample, level, type));
+}
+
+/* Stores texel at coord of the texture's storage image at level, through
+ * deref, or as the unsigned bytes of its unorm channels, nearest, where its
+ * storage images hold those (integer_storage). False after reporting why. */
+static bool
+store_texel(const struct call *call, nir_deref_instr *deref, nir_def *coord, nir_def *level,
+            nir_def *texel)
+{
+   nir_builder *b = call->b;
+   const struct shape *shape = call->shape;
+   const struct stela_air_texture_context *c = call->c;
+   nir_def *kind = integer_storage(call);
+   nir_block *blocks[4];
+   if (kind) {
+      if (!c->branch(c->translator, nir_ine_imm(b, kind, 0), blocks))
+         return false;
+      nir_deref_instr *integer = integer_deref(call, level);
+      if (!integer)
+         return false;
+      nir_def *bytes = nir_f2u32(b, nir_fround_even(b, nir_fmul_imm(b, nir_fsat(b, texel), 255.0)));
+      nir_image_deref_store(b, &integer->def, coord, nir_undef(b, 1, 32), bytes, nir_imm_int(b, 0),
+                            .image_dim = shape->dim, .image_array = shape->array,
+                            .access = image_access(call, level), .src_type = nir_type_uint32);
+      c->branch_else(c->translator, blocks);
+      if (!(deref = texture_deref(call, level)))
+         return false;
+   }
+   nir_image_deref_store(b, &deref->def, coord, nir_undef(b, 1, 32), texel, nir_imm_int(b, 0),
+                         .image_dim = shape->dim, .image_array = shape->array,
+                         .access = image_access(call, level),
+                         .src_type = nir_get_nir_type_for_glsl_base_type(base_type(call->texture)));
+   return !kind || c->branch_join(c->translator, blocks, nir_imm_int(b, 0), nir_imm_int(b, 0));
+}
+
 /* A signed position clamped to the texels of a level whose size, and then
  * layers, size holds. */
 static nir_def *
@@ -1437,15 +1558,8 @@ read_texel(struct call *call, nir_def **result)
          position = edge_clamped(call, position, size);
       }
       nir_def *coord = image_coord(call, position, face, layer);
-      nir_def *index = sample ? sample : nir_undef(b, 1, 32);
-      nir_alu_type type = nir_get_nir_type_for_glsl_base_type(base_type(texture));
-      value = call->sparse ?
-         nir_image_deref_sparse_load(b, 5, 32, &deref->def, coord, index, nir_imm_int(b, 0),
-                                     .image_dim = shape->dim, .image_array = shape->array,
-                                     .access = image_access(call, level), .dest_type = type) :
-         nir_image_deref_load(b, 4, 32, &deref->def, coord, index, nir_imm_int(b, 0),
-                              .image_dim = shape->dim, .image_array = shape->array,
-                              .access = image_access(call, level), .dest_type = type);
+      if (!(value = storage_texel(call, deref, coord, sample, level)))
+         return false;
    } else {
       nir_def *lod = NULL;
       if (shape->mipmapped && !(lod = uint_operand(call)))
@@ -1595,11 +1709,7 @@ write_texel(struct call *call)
    default: break;
    }
    value = srgb_storage(call, value, true);
-   nir_image_deref_store(b, &deref->def, image_coord(call, position, face, layer),
-                         nir_undef(b, 1, 32), value, nir_imm_int(b, 0), .image_dim = shape->dim,
-                         .image_array = shape->array, .access = image_access(call, level),
-                         .src_type = nir_get_nir_type_for_glsl_base_type(base_type(texture)));
-   return true;
+   return store_texel(call, deref, image_coord(call, position, face, layer), level, value);
 }
 
 /* The member type a slice write's name ends in: f16, f32, i8, i16 or i32,
@@ -1663,12 +1773,7 @@ slice_pixel(void *data, nir_def *index, nir_def **values)
    nir_def *at = nir_iadd(b, slice->position, nir_vec2(b, x, y));
    nir_def *texel = slice->floating ? srgb_storage(call, nir_vec(b, lanes, 4), true) :
                                       nir_vec(b, lanes, 4);
-   nir_image_deref_store(b, &deref->def, image_coord(call, at, NULL, NULL), nir_undef(b, 1, 32),
-                         texel, nir_imm_int(b, 0),
-                         .image_dim = GLSL_SAMPLER_DIM_2D, .image_array = false,
-                         .access = image_access(call, slice->level),
-                         .src_type = nir_get_nir_type_for_glsl_base_type(base_type(call->texture)));
-   return true;
+   return store_texel(call, deref, image_coord(call, at, NULL, NULL), slice->level, texel);
 }
 
 /* An imageblock slice into a texture, as texture2d::write(slice, position,

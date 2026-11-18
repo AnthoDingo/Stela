@@ -629,6 +629,23 @@ pub fn fragment_tests(device: &PhysicalDevice) -> bool {
     device.features.fragment_shader_pixel_interlock && depth_stencil_copies(device)
 }
 
+/// The integer twin through which storage views of `format`, a format they
+/// hold themselves, hold its texels on `device`, with its channels
+/// (`PixelFormat::integer_storage`): where the driver reads the format only
+/// with a declared format, but reads and writes its twin without one, as ANV
+/// on graphics version 9 reads RGBA8Unorm. Shaders convert the channels.
+pub fn integer_storage(device: &PhysicalDevice, format: PixelFormat) -> Option<(PixelFormat, u8)> {
+    use FormatFeatures as F;
+    let (twin, channels) = format.integer_storage()?;
+    let optimal = |format: PixelFormat| {
+        let realization = format.describe().realization.as_ref().ok()?;
+        Some(device.formats.get(realization.format).optimal)
+    };
+    let held = F::STORAGE_IMAGE | F::STORAGE_READ_WITHOUT_FORMAT | F::STORAGE_WRITE_WITHOUT_FORMAT;
+    (!optimal(format)?.contains(F::STORAGE_READ_WITHOUT_FORMAT) && optimal(twin)?.contains(held))
+        .then_some((twin, channels))
+}
+
 impl Derivation<'_> {
     fn cause(&self, requirement: &Requirement) -> Option<Cause> {
         if !requirement.driver {

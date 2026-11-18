@@ -492,6 +492,13 @@ nir_def *stela_metal_texture_extended_storage(nir_builder *b,
                                               const struct stela_air_texture *texture,
                                               nir_def *id, void *stage);
 
+/* stela_air_texture_query: the channels the texture's MTLResourceID says its
+ * storage images hold as unsigned bytes, from
+ * STELA_METAL_INTEGER_STORAGE_SHIFT. */
+nir_def *stela_metal_texture_integer_storage(nir_builder *b,
+                                             const struct stela_air_texture *texture,
+                                             nir_def *id, void *stage);
+
 /* stela_air_texture_query: the second plane (enum stela_air_planes) the
  * texture's MTLResourceID carries, zero for one plane. */
 nir_def *stela_metal_texture_planes(nir_builder *b, const struct stela_air_texture *texture,

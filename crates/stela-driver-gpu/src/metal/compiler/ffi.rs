@@ -304,6 +304,9 @@ pub struct Target {
     /// Nonzero when a stencil output's function runs the fragment tests
     /// itself, without stencil export.
     pub(super) fragment_tests: u32,
+    /// Nonzero when textures' storage images may hold unsigned bytes in
+    /// place of unorm ones (`ResourceId::INTEGER_STORAGE_SHIFT`).
+    pub(super) integer_storage: u32,
 }
 
 #[repr(C)]

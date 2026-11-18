@@ -553,3 +553,19 @@ fn linear_and_texture_buffer_alignments() {
         0
     );
 }
+
+#[test]
+fn unorm_bytes_take_integer_storage_only_where_the_driver_reads_them_with_a_format() {
+    use crate::metal::{capabilities::integer_storage, vulkan::FormatFeatures};
+    let chip = Chip::find(0x1b3).unwrap();
+    let mut device = nvk(chip, 16 << 30);
+    assert_eq!(integer_storage(&device, P::Rgba8Unorm), None);
+    // ANV on graphics version 9 reads RGBA8Unorm only with a declared format.
+    let format = P::Rgba8Unorm.describe().realization.as_ref().unwrap().format;
+    let mut support = device.formats.get(format);
+    support.optimal = support.optimal.difference(FormatFeatures::STORAGE_READ_WITHOUT_FORMAT);
+    device.formats.insert(format, support);
+    assert_eq!(integer_storage(&device, P::Rgba8Unorm), Some((P::Rgba8Uint, 4)));
+    assert_eq!(integer_storage(&device, P::R8Unorm), None);
+    assert_eq!(integer_storage(&device, P::Rgba16Float), None);
+}

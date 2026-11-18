@@ -743,6 +743,19 @@ impl PixelFormat {
         None
     }
 
+    /// The unsigned integer format of this 8-bit unorm format's bytes, with
+    /// its channels, through whose storage views shaders read and write its
+    /// texels where the driver reads it only with a declared format
+    /// (`capabilities::integer_storage`).
+    pub fn integer_storage(self) -> Option<(Self, u8)> {
+        match self {
+            Self::R8Unorm => Some((Self::R8Uint, 1)),
+            Self::Rg8Unorm => Some((Self::Rg8Uint, 2)),
+            Self::Rgba8Unorm => Some((Self::Rgba8Uint, 4)),
+            _ => None,
+        }
+    }
+
     /// The linear twin whose storage views hold this uncompressed sRGB
     /// format's texels: no Vulkan device stores sRGB images, and Apple GPUs
     /// write them from shaders, which then encode and decode the color
