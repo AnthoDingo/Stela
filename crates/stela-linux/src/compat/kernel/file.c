@@ -329,6 +329,20 @@ long stela_linux_fd_device(int fd)
 	return device;
 }
 
+/* vfs_llseek, whose fs/read_write.c the port does not build: a file without
+ * llseek does not seek. A dma-buf's tells its size (dma_buf_llseek). */
+long long stela_linux_fd_seek(int fd, long long offset, int whence)
+{
+	struct file *file = fget((unsigned int)fd);
+
+	if (!file)
+		return -EBADF;
+	loff_t position = file->f_op->llseek ? file->f_op->llseek(file, offset, whence) : -ESPIPE;
+
+	fput(file);
+	return position;
+}
+
 static DECLARE_WAIT_QUEUE_HEAD(stela_linux_waiters);
 
 void stela_linux_wait(const volatile unsigned int *word, unsigned int value, u64 nanoseconds)

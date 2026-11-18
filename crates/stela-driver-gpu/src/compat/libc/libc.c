@@ -1111,12 +1111,14 @@ ssize_t write(int fd, const void *buffer, size_t size)
 	return (ssize_t)size;
 }
 
+/* Linux's files seek: ANV learns an imported dma-buf's size from its end
+ * (anv_device_import_bo). The C library's own do not. */
 off_t lseek(int fd, off_t offset, int whence)
 {
-	(void)fd;
-	(void)offset;
-	(void)whence;
-	return fail(EBADF);
+	if (text_file(fd) || fd >= STELA_LIBC_FILE_BASE)
+		return fail(EBADF);
+	long long position = stela_libc_drm_seek(fd, offset, whence);
+	return position < 0 ? fail((int)-position) : (off_t)position;
 }
 
 int flock(int fd, int operation)

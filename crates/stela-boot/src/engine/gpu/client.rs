@@ -136,6 +136,11 @@ enum Operation {
     Close(c_int),
     Duplicate(c_int),
     Device(c_int),
+    Seek {
+        fd: c_int,
+        offset: i64,
+        whence: c_int,
+    },
     Control {
         fd: c_int,
         request: u32,
@@ -390,6 +395,7 @@ unsafe fn perform(gpu: &Installed, operation: Operation) -> i64 {
             Operation::Close(fd) => client::close(fd).into(),
             Operation::Duplicate(fd) => client::duplicate(fd).into(),
             Operation::Device(fd) => client::device(fd),
+            Operation::Seek { fd, offset, whence } => client::seek(fd, offset, whence),
             Operation::Control {
                 fd,
                 request,
@@ -1576,6 +1582,11 @@ extern "C" fn stela_libc_drm_dup(fd: c_int) -> c_int {
 #[unsafe(no_mangle)]
 extern "C" fn stela_libc_drm_rdev(fd: c_int) -> c_long {
     submit(Operation::Device(fd)) as c_long
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn stela_libc_drm_seek(fd: c_int, offset: i64, whence: c_int) -> i64 {
+    submit(Operation::Seek { fd, offset, whence })
 }
 
 #[unsafe(no_mangle)]
